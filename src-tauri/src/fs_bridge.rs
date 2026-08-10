@@ -169,9 +169,10 @@ pub async fn replace_original(
         .map_err(|e| AppError::Other(format!("Failed to move original to Recycle Bin: {e}")))?;
 
     // Rename compressed → target. The target must not exist (we just recycled the
-    // original for the same-ext case); remove any stale file just in case.
+    // original for the same-ext case); recycle any stale file just in case.
     if target.exists() {
-        std::fs::remove_file(&target)?;
+        trash::delete(&target)
+            .map_err(|e| AppError::Other(format!("Failed to move existing file to Recycle Bin: {e}")))?;
     }
     let mut retries = 5;
     loop {
