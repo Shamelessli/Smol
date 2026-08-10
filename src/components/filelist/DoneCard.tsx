@@ -144,7 +144,7 @@ export function DoneCard({ job }: { job: Job }) {
 
       <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
         {/* Preview image */}
-        {job.kind === "image" && job.outputPath && !outputLarger && (
+        {job.kind === "image" && job.outputPath && !outputLarger && job.outputPath !== job.inputPath && (
           <button
             onClick={() => setShowPreview(true)}
             className="p-1 rounded hover:bg-zinc-700 text-zinc-500 hover:text-zinc-300"

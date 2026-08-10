@@ -3,8 +3,9 @@ import { useIsSqueezing, useReadyCompressableCount, useEncodingJobCount } from "
 import { startSqueeze } from "@/hooks/useCompression";
 import { Zap, Loader2 } from "lucide-react";
 import { open } from "@tauri-apps/plugin-dialog";
+import type { Settings } from "@/types";
 
-type OutputMode = "same-folder" | "subfolder" | "custom";
+type OutputMode = Settings["outputMode"];
 
 export function OutputControls() {
   const outputMode      = useOutputMode();
@@ -26,6 +27,7 @@ export function OutputControls() {
         ? `Folder: ${customOutputDir.split(/[\\/]/).pop()}`
         : "Choose folder...",
     },
+    { id: "replace" as const, label: "Replace original" },
   ];
 
 
@@ -70,16 +72,27 @@ export function OutputControls() {
         ))}
       </select>
 
-      {/* Filename pattern */}
+      {/* Filename pattern — disabled in replace mode (pattern is ignored) */}
       <input
         type="text"
         value={filenamePattern}
+        disabled={outputMode === "replace"}
         onChange={(e) =>
           useSettingsStore.getState().patch({ filenamePattern: e.target.value })
         }
-        className="flex-1 bg-zinc-900 border border-zinc-800 rounded-lg px-2 py-1.5 text-xs text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-indigo-500"
+        className={`flex-1 bg-zinc-900 border border-zinc-800 rounded-lg px-2 py-1.5 text-xs ${
+          outputMode === "replace"
+            ? "text-zinc-600 cursor-not-allowed"
+            : "text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-indigo-500"
+        }`}
         placeholder="{name}_smol{ext}"
       />
+
+      {outputMode === "replace" && (
+        <span className="text-[10px] text-amber-400/80 shrink-0">
+          Originals are moved to Recycle Bin
+        </span>
+      )}
 
       {/* Squeeze button — right side, normal-sized, no w-full */}
       <button
