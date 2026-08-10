@@ -28,9 +28,6 @@ pub fn disk_full_hint(err: &str) -> Option<&'static str> {
         "no space left on device",
         "not enough space",
         "insufficient space",
-        "error writing file",
-        "error writing output",
-        "failed to write",
         "disk full",
         "enospc",
         "空间不足",
@@ -66,5 +63,10 @@ mod tests {
     #[test]
     fn unrelated_error_returns_none() {
         assert_eq!(disk_full_hint("Invalid data found when processing input"), None);
+    }
+
+    #[test]
+    fn non_disk_write_failure_returns_none() {
+        assert_eq!(disk_full_hint("error writing output file: Permission denied"), None);
     }
 }

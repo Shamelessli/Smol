@@ -13,7 +13,7 @@
 - Windows 10/11 64-bit is the only target.
 - Do NOT change behavior for non-disk-full failures — existing messages (`FFmpeg: …`, `Ghostscript: …`, `IO error: …`) stay exactly as they are.
 - Friendly hint text (verbatim): `Not enough disk space to write the output. Free up space and retry.`
-- Detection patterns (verbatim, all matched case-insensitively via `to_lowercase`): `no space left on device`, `not enough space`, `insufficient space`, `error writing file`, `error writing output`, `failed to write`, `disk full`, `enospc`, `空间不足`.
+- Detection patterns (verbatim, all matched case-insensitively via `to_lowercase`): `no space left on device`, `not enough space`, `insufficient space`, `disk full`, `enospc`, `空间不足`.
 - Rust logic is covered by `cargo test` in `src-tauri`; the frontend has no test framework (no frontend changes in this plan).
 
 ---
@@ -79,9 +79,6 @@ pub fn disk_full_hint(err: &str) -> Option<&'static str> {
         "no space left on device",
         "not enough space",
         "insufficient space",
-        "error writing file",
-        "error writing output",
-        "failed to write",
         "disk full",
         "enospc",
         "空间不足",

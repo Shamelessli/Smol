@@ -32,9 +32,6 @@ pub fn disk_full_hint(err: &str) -> Option<&'static str> {
         "no space left on device",
         "not enough space",
         "insufficient space",
-        "error writing file",
-        "error writing output",
-        "failed to write",
         "disk full",
         "enospc",
         "空间不足",
@@ -67,7 +64,7 @@ pub fn disk_full_hint(err: &str) -> Option<&'static str> {
 
 ### 单元测试（`error.rs` 内 `#[cfg(test)]`）
 
-- 英文特征命中：`"error writing file: No space left on device"` → Some(HINT)
+- 英文特征命中：`"error writing output file: No space left on device"` → Some(HINT)
 - 大小写不敏感：`"NO SPACE LEFT ON DEVICE"` → Some(HINT)
 - 中文特征命中：`"磁盘空间不足"` → Some(HINT)
 - 不相关错误：`"Invalid data found when processing input"` → None
