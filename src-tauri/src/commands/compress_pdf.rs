@@ -136,6 +136,9 @@ pub async fn compress_pdf(
 
     if !status.success() {
         let _ = std::fs::remove_file(&temp_path);
+        if let Some(hint) = crate::error::disk_full_hint(&stderr_output) {
+            return Err(AppError::Other(hint.into()));
+        }
         let msg = if stderr_output.is_empty() {
             "PDF compression failed or was cancelled".into()
         } else {

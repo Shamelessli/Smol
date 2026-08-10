@@ -176,7 +176,11 @@ pub async fn compress_image(
               .into_owned()
     };
 
-    std::fs::write(&temp_path, &compressed)?;
+    std::fs::write(&temp_path, &compressed).map_err(|e| {
+        crate::error::disk_full_hint(&e.to_string())
+            .map(|h| AppError::Other(h.into()))
+            .unwrap_or_else(|| AppError::Io(e.to_string()))
+    })?;
 
     if Path::new(&output_path).exists() {
         std::fs::remove_file(&output_path)?;
