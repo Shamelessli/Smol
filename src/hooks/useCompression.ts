@@ -1,9 +1,9 @@
 import { Channel } from "@tauri-apps/api/core";
 import { useJobsStore } from "@/store/jobs";
 import { useSettingsStore } from "@/store/settings";
-import { compressAudio, compressImage, compressPdf, compressVideo } from "@/lib/tauri";
+import { compressAudio, compressImage, compressPdf, compressVideo, replaceOriginal } from "@/lib/tauri";
 import type { VideoProgressEvent } from "@/lib/tauri";
-import { buildOutputPath } from "@/lib/outputPath";
+import { buildOutputPath, buildReplaceIntermediatePath } from "@/lib/outputPath";
 
 /**
  * Extract a human-readable string from whatever Tauri throws on command failure.
@@ -65,12 +65,15 @@ export async function startSqueeze(): Promise<void> {
       const job = useJobsStore.getState().jobs[jobId];
       if (!job) return;
 
-      const outputPath = buildOutputPath(
-        job.inputPath,
-        outputMode,
-        filenamePattern,
-        customOutputDir,
-      );
+      const outputPath =
+        outputMode === "replace"
+          ? buildReplaceIntermediatePath(job.inputPath)
+          : buildOutputPath(
+              job.inputPath,
+              outputMode,
+              filenamePattern,
+              customOutputDir,
+            );
 
       // Each job gets its own channel — events carry jobId so routing is exact
       const channel = new Channel<VideoProgressEvent>();
@@ -115,12 +118,14 @@ export async function startSqueeze(): Promise<void> {
           );
         }
 
-        // result.outputLarger: compressed ≥ original — original was kept
-        useJobsStore.getState().setJobOutput(
-          jobId,
-          result.outputPath,
-          result.outputBytes,
-        );
+        // Replace mode: move original to Recycle Bin, put compressed in its place.
+        // outputLarger (compressed ≥ original) → original kept, nothing replaced.
+        if (outputMode === "replace" && !result.outputLarger) {
+          const finalPath = await replaceOriginal(result.outputPath, job.inputPath);
+          useJobsStore.getState().setJobOutput(jobId, finalPath, result.outputBytes);
+        } else {
+          useJobsStore.getState().setJobOutput(jobId, result.outputPath, result.outputBytes);
+        }
       } catch (err) {
         useJobsStore.getState().setJobError(jobId, extractErrorMessage(err));
       }
