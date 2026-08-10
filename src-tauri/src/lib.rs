@@ -25,6 +25,7 @@ pub fn run() {
         .manage(ActiveJobPids::default())
         .invoke_handler(tauri::generate_handler![
             fs_bridge::get_path_info,
+            fs_bridge::replace_original,
             fs_bridge::list_dir_supported,
             fs_bridge::reveal_in_explorer,
             fs_bridge::write_clipboard_image,

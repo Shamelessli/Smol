@@ -1,5 +1,5 @@
 use serde::Serialize;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use crate::error::AppError;
 
 #[derive(Serialize)]
@@ -118,4 +118,95 @@ pub fn write_clipboard_image(bytes: Vec<u8>) -> Result<PathInfo, AppError> {
     file.write_all(&bytes)?;
     
     get_path_info(filepath.to_string_lossy().to_string())
+}
+
+/// Decide where the compressed file ends up after replacing the original.
+/// Same extension (case-insensitive) → the original path itself;
+/// different extension (e.g. WAV → mp3) → original stem + new extension.
+fn compute_replace_target(original_path: &str, compressed_path: &str) -> PathBuf {
+    let orig = Path::new(original_path);
+    let comp = Path::new(compressed_path);
+    let comp_ext = comp.extension().and_then(|e| e.to_str()).unwrap_or("");
+    let orig_ext = orig.extension().and_then(|e| e.to_str()).unwrap_or("");
+    if comp_ext.eq_ignore_ascii_case(orig_ext) {
+        orig.to_path_buf()
+    } else {
+        orig.with_extension(comp_ext)
+    }
+}
+
+/// Replace the original file with a compressed one.
+/// Moves the original to the Recycle Bin (aborting on failure), then renames
+/// `compressed_path` onto the original's path (same stem + new extension when
+/// the container format changed). Returns the final output path.
+/// Refuses when `compressed_path` is missing or not strictly smaller.
+#[tauri::command]
+pub async fn replace_original(
+    compressed_path: String,
+    original_path: String,
+) -> Result<String, AppError> {
+    let comp = Path::new(&compressed_path);
+    let orig = Path::new(&original_path);
+
+    let comp_size = std::fs::metadata(comp)
+        .map_err(|_| AppError::PathDoesNotExist(compressed_path.clone()))?
+        .len();
+    let orig_size = std::fs::metadata(orig)
+        .map_err(|_| AppError::PathDoesNotExist(original_path.clone()))?
+        .len();
+
+    if comp_size >= orig_size {
+        return Err(AppError::Other(
+            "Compressed file is not smaller than the original → refusing to replace".into(),
+        ));
+    }
+
+    let target = compute_replace_target(&original_path, &compressed_path);
+
+    // Safety net: the original always goes to the Recycle Bin, never a hard delete.
+    // On failure we abort — nothing has been destroyed yet.
+    trash::delete(orig)
+        .map_err(|e| AppError::Other(format!("Failed to move original to Recycle Bin: {e}")))?;
+
+    // Rename compressed → target. The target must not exist (we just recycled the
+    // original for the same-ext case); remove any stale file just in case.
+    if target.exists() {
+        std::fs::remove_file(&target)?;
+    }
+    let mut retries = 5;
+    loop {
+        match std::fs::rename(comp, &target) {
+            Ok(_) => break,
+            Err(e) if e.raw_os_error() == Some(32) && retries > 0 => {
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                retries -= 1;
+            }
+            Err(e) => return Err(AppError::Other(format!("Failed to move compressed file: {e}"))),
+        }
+    }
+
+    Ok(target.to_string_lossy().into_owned())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn compute_replace_target_same_extension_returns_original() {
+        let target = compute_replace_target(r"D:\music\song.mp4", r"D:\music\song_smol.mp4");
+        assert_eq!(target.to_string_lossy(), r"D:\music\song.mp4");
+    }
+
+    #[test]
+    fn compute_replace_target_different_extension_reuses_stem() {
+        let target = compute_replace_target(r"D:\music\song.wav", r"D:\music\song_smol.mp3");
+        assert_eq!(target.to_string_lossy(), r"D:\music\song.mp3");
+    }
+
+    #[test]
+    fn compute_replace_target_extension_match_is_case_insensitive() {
+        let target = compute_replace_target(r"D:\music\song.MP4", r"D:\music\song_smol.mp4");
+        assert_eq!(target.to_string_lossy(), r"D:\music\song.MP4");
+    }
 }
