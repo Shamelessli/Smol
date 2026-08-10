@@ -162,6 +162,15 @@ export const compressPdf = (
     onProgress,
   });
 
+/**
+ * Replace the original file with the compressed one: moves the original to the
+ * Recycle Bin, then renames `compressedPath` onto the original's path (same
+ * stem + new extension when the format changed). Returns the final path.
+ * Throws if compressed is missing / not smaller, or the Recycle Bin move fails.
+ */
+export const replaceOriginal = (compressedPath: string, originalPath: string) =>
+  invoke<string>("replace_original", { compressedPath, originalPath });
+
 /** Open Windows Explorer with the given file highlighted in its parent folder. */
 export const revealInExplorer = (path: string) =>
   invoke<void>("reveal_in_explorer", { path });

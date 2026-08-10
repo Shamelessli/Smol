@@ -6,7 +6,10 @@
  */
 export function buildOutputPath(
   inputPath: string,
-  outputMode: "same-folder" | "subfolder" | "custom",
+  // Accept the full Settings.outputMode union so callers can pass it through;
+  // "replace" is not a real buildOutputPath mode — it falls through to the
+  // same-folder default and is handled via buildReplaceIntermediatePath().
+  outputMode: "same-folder" | "subfolder" | "custom" | "replace",
   filenamePattern: string,
   customOutputDir?: string,
 ): string {
@@ -39,4 +42,20 @@ export function buildOutputPath(
   }
 
   return `${outDir}${sep}${outFilename}`;
+}
+
+/**
+ * Compute the transient intermediate output path for "replace original" mode.
+ * Always sits in the input's directory with a distinct name (`{name}_smol{ext}`)
+ * so the compression commands never see input == output.
+ */
+export function buildReplaceIntermediatePath(inputPath: string): string {
+  const sep = inputPath.includes("\\") ? "\\" : "/";
+  const lastSep = Math.max(inputPath.lastIndexOf("\\"), inputPath.lastIndexOf("/"));
+  const dir = inputPath.slice(0, lastSep);
+  const filename = inputPath.slice(lastSep + 1);
+  const dotIdx = filename.lastIndexOf(".");
+  const name = dotIdx >= 0 ? filename.slice(0, dotIdx) : filename;
+  const ext = dotIdx >= 0 ? filename.slice(dotIdx) : "";
+  return `${dir}${sep}${name}_smol${ext}`;
 }

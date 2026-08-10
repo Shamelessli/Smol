@@ -70,7 +70,7 @@ export interface TargetFileSize {
 export interface Settings {
   preset: CompressionPreset;
   targetFileSize?: TargetFileSize;
-  outputMode: "same-folder" | "subfolder" | "custom";
+  outputMode: "same-folder" | "subfolder" | "custom" | "replace";
   customOutputDir?: string;
   filenamePattern: string;
   parallelJobs: number;
