@@ -6,10 +6,7 @@
  */
 export function buildOutputPath(
   inputPath: string,
-  // Accept the full Settings.outputMode union so callers can pass it through;
-  // "replace" is not a real buildOutputPath mode — it falls through to the
-  // same-folder default and is handled via buildReplaceIntermediatePath().
-  outputMode: "same-folder" | "subfolder" | "custom" | "replace",
+  outputMode: "same-folder" | "subfolder" | "custom",
   filenamePattern: string,
   customOutputDir?: string,
 ): string {

@@ -122,7 +122,7 @@ export async function startSqueeze(): Promise<void> {
         // outputLarger (compressed ≥ original) → original kept, nothing replaced.
         if (outputMode === "replace" && !result.outputLarger) {
           const finalPath = await replaceOriginal(result.outputPath, job.inputPath);
-          useJobsStore.getState().setJobOutput(jobId, finalPath, result.outputBytes);
+          useJobsStore.getState().setJobOutput(jobId, finalPath, result.outputBytes, true);
         } else {
           useJobsStore.getState().setJobOutput(jobId, result.outputPath, result.outputBytes);
         }

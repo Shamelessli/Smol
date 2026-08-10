@@ -36,6 +36,8 @@ export interface Job {
   inputPath: string;       // absolute filesystem path
   name: string;            // display name (filename)
   outputPath?: string;
+  /** True when the compressed file replaced the original (original moved to Recycle Bin). */
+  replacedOriginal?: boolean;
   kind: FileKind;
   addedAt: number;         // Date.now() when enqueued
 

@@ -182,7 +182,10 @@ pub async fn replace_original(
                 tokio::time::sleep(std::time::Duration::from_millis(100)).await;
                 retries -= 1;
             }
-            Err(e) => return Err(AppError::Other(format!("Failed to move compressed file: {e}"))),
+            Err(e) => return Err(AppError::Other(format!(
+                "Original moved to the Recycle Bin, but the compressed file could not be moved into place — it remains at: {} ({e})",
+                compressed_path
+            ))),
         }
     }
 
