@@ -39,6 +39,7 @@ pub fn run() {
             cancel_job,
             spike::spike_parse_path, // TEMP SPIKE
             spike::spike_echo,       // TEMP SPIKE
+            spike::spike_pick,       // TEMP SPIKE
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
