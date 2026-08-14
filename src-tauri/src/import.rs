@@ -12,10 +12,11 @@ use windows::Win32::System::Com::{
 };
 use windows::Win32::UI::Shell::Common::ITEMIDLIST;
 use windows::Win32::UI::Shell::{
-    BHID_SFObject, FOF_NOCONFIRMATION, FOLDERID_Documents, FOS_ALLOWMULTISELECT, FileOpenDialog,
-    FileOperation, IFileOpenDialog, IFileOperation, ILFree, ILGetSize, IShellFolder, IShellItem,
-    IShellItem2, IShellItemArray, KNOWN_FOLDER_FLAG, SHCreateItemFromIDList, SHGetIDListFromObject,
-    SHGetKnownFolderPath, SHParseDisplayName, SIGDN, SIGDN_DESKTOPABSOLUTEPARSING, SIGDN_FILESYSPATH,
+    BHID_SFObject, FOF_NOCONFIRMATION, FOF_NOERRORUI, FOF_SILENT, FOLDERID_Documents,
+    FOS_ALLOWMULTISELECT, FileOpenDialog, FileOperation, IFileOpenDialog, IFileOperation, ILFree,
+    ILGetSize, IShellFolder, IShellItem, IShellItem2, IShellItemArray, KNOWN_FOLDER_FLAG,
+    SHCreateItemFromIDList, SHGetIDListFromObject, SHGetKnownFolderPath, SHParseDisplayName, SIGDN,
+    SIGDN_DESKTOPABSOLUTEPARSING, SIGDN_FILESYSPATH,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -90,6 +91,17 @@ pub fn has_enough_space(free_bytes: u64, needed_bytes: u64) -> bool {
     needed_bytes == 0 || free_bytes >= needed_bytes
 }
 
+/// Drive prefix (e.g. `C:\`) of a workspace path, for free-space checks.
+/// Falls back to `C:\` when the path has no drive-letter segment.
+fn workspace_drive(workspace: &str) -> String {
+    workspace
+        .split(['\\', '/'])
+        .next()
+        .filter(|s| s.ends_with(':'))
+        .map(|s| format!(r"{s}\"))
+        .unwrap_or_else(|| "C:\\".to_string())
+}
+
 /// Serialize an ITEMIDLIST's raw bytes to base64 (PIDLs are plain data).
 pub fn pidl_bytes_to_base64(bytes: &[u8]) -> String {
     STANDARD.encode(bytes)
@@ -160,8 +172,10 @@ fn new_file_operation() -> Result<IFileOperation, AppError> {
 }
 
 fn perform(op: &IFileOperation) -> Result<(), AppError> {
-    // 0.61 has no FOFX_NOCONFIRMATION; FOF_NOCONFIRMATION suffices.
-    unsafe { op.SetOperationFlags(FOF_NOCONFIRMATION) }
+    // Suppress every possible UI surface (0.61 has no FOFX_NOCONFIRMATION):
+    // no confirmation, no progress, no error dialogs. These run in a
+    // background command on MTP devices — dialogs must never appear.
+    unsafe { op.SetOperationFlags(FOF_NOCONFIRMATION | FOF_SILENT | FOF_NOERRORUI) }
         .map_err(|e| AppError::Other(format!("SetOperationFlags: {e}")))?;
     unsafe { op.PerformOperations() }
         .map_err(|e| AppError::Other(format!("PerformOperations: {e}")))
@@ -196,10 +210,9 @@ fn parse_shell_item(path: &str) -> Result<IShellItem, AppError> {
         let mut pidl: *mut ITEMIDLIST = std::ptr::null_mut();
         SHParseDisplayName(&name, None, &mut pidl, 0, None)
             .map_err(|e| AppError::Other(format!("SHParseDisplayName failed for {path}: {e}")))?;
-        let item = SHCreateItemFromIDList::<IShellItem>(pidl)
-            .map_err(|e| AppError::Other(format!("SHCreateItemFromIDList failed for {path}: {e}")))?;
+        let item = SHCreateItemFromIDList::<IShellItem>(pidl);
         ILFree(Some(pidl));
-        Ok(item)
+        item.map_err(|e| AppError::Other(format!("SHCreateItemFromIDList failed for {path}: {e}")))
     }
 }
 
@@ -214,8 +227,10 @@ fn shell_item_size(item: &IShellItem) -> Option<u64> {
     }
 }
 
-/// Create/obtain a child shell item (e.g. the `smol` folder) under `parent`.
-fn create_child_folder(parent: &IShellItem, child_name: &str) -> Result<IShellItem, AppError> {
+/// Resolve a child item by name inside the folder bound from `parent`.
+/// `SHParseDisplayName` only resolves one level, so parse via the parent's
+/// `IShellFolder` (used for `smol` subfolder and the salted temp copy).
+fn parse_shell_child(parent: &IShellItem, child_name: &str) -> Result<IShellItem, AppError> {
     unsafe {
         let folder: IShellFolder = parent
             .BindToHandler(None, &BHID_SFObject)
@@ -225,11 +240,15 @@ fn create_child_folder(parent: &IShellItem, child_name: &str) -> Result<IShellIt
         folder
             .ParseDisplayName(HWND::default(), None, &name, None, &mut pidl, std::ptr::null_mut())
             .map_err(|e| AppError::Other(format!("ParseDisplayName({child_name}): {e}")))?;
-        let child = SHCreateItemFromIDList::<IShellItem>(pidl)
-            .map_err(|e| AppError::Other(format!("SHCreateItemFromIDList: {e}")))?;
+        let child = SHCreateItemFromIDList::<IShellItem>(pidl);
         ILFree(Some(pidl));
-        Ok(child)
+        child.map_err(|e| AppError::Other(format!("SHCreateItemFromIDList({child_name}): {e}")))
     }
+}
+
+/// Create/obtain a child shell item (e.g. the `smol` folder) under `parent`.
+fn create_child_folder(parent: &IShellItem, child_name: &str) -> Result<IShellItem, AppError> {
+    parse_shell_child(parent, child_name)
 }
 
 /// Resolve `original_name` inside the parent folder captured by `pidl_bytes`.
@@ -237,18 +256,7 @@ fn parse_shell_item_original(original_name: &str, pidl_bytes: &[u8]) -> Result<I
     unsafe {
         let parent = SHCreateItemFromIDList::<IShellItem>(pidl_bytes.as_ptr() as *const ITEMIDLIST)
             .map_err(|e| AppError::Other(format!("SHCreateItemFromIDList: {e}")))?;
-        let folder: IShellFolder = parent
-            .BindToHandler(None, &BHID_SFObject)
-            .map_err(|e| AppError::Other(format!("BindToHandler IShellFolder: {e}")))?;
-        let name = HSTRING::from(original_name);
-        let mut pidl: *mut ITEMIDLIST = std::ptr::null_mut();
-        folder
-            .ParseDisplayName(HWND::default(), None, &name, None, &mut pidl, std::ptr::null_mut())
-            .map_err(|e| AppError::Other(format!("ParseDisplayName({original_name}): {e}")))?;
-        let item = SHCreateItemFromIDList::<IShellItem>(pidl)
-            .map_err(|e| AppError::Other(format!("SHCreateItemFromIDList: {e}")))?;
-        ILFree(Some(pidl));
-        Ok(item)
+        parse_shell_child(&parent, original_name)
     }
 }
 
@@ -295,12 +303,13 @@ pub async fn pick_import() -> Result<Vec<PickResult>, AppError> {
         let count = unsafe { results.GetCount() }.map_err(|e| AppError::Other(format!("GetCount: {e}")))?;
         let mut out: Vec<PickResult> = Vec::new();
 
-        // free-space pre-check once
+        // free-space pre-check once, on the volume the workspace lives on
         let mut free: u64 = 0;
-        let drive = "C:\\";
+        let workspace = import_workspace_dir()?;
+        let drive = workspace_drive(&workspace);
         unsafe {
-            GetDiskFreeSpaceExW(&HSTRING::from(drive), Some(&mut free), None, None)
-                .map_err(|e| AppError::Other(format!("GetDiskFreeSpaceExW: {e}")))?;
+            GetDiskFreeSpaceExW(&HSTRING::from(&drive), Some(&mut free), None, None)
+                .map_err(|e| AppError::Other(format!("GetDiskFreeSpaceExW({drive}): {e}")))?;
         }
 
         for i in 0..count {
@@ -327,7 +336,6 @@ pub async fn pick_import() -> Result<Vec<PickResult>, AppError> {
                 ));
             }
 
-            let workspace = import_workspace_dir()?;
             let uuid = uuid::Uuid::new_v4().simple().to_string();
             let dest = compute_import_dir(&workspace, &uuid);
             std::fs::create_dir_all(&dest)?;
@@ -414,21 +422,34 @@ pub async fn deliver_output(
         let local_item = parse_shell_item(&lp)?;
         let op = new_file_operation()?;
 
-        match target.mode {
-            Mode::Replace => {
-                let original_item = parse_shell_item_original(&original_name, &pidl_bytes)?;
-                copy_item(&op, &local_item, &dest, Some(&target.name))?;
-                unsafe { op.DeleteItem(&original_item, None) }
-                    .map_err(|e| AppError::Other(format!("DeleteItem: {e}")))?;
-                let rename = HSTRING::from(&target.rename_from);
-                unsafe { op.RenameItem(&local_item, &rename, None) }
-                    .map_err(|e| AppError::Other(format!("RenameItem: {e}")))?;
-            }
-            _ => {
-                copy_item(&op, &local_item, &dest, Some(&target.name))?;
-            }
+        if target.mode == Mode::Replace {
+            // Phase 1 — copy the local file to a salted temp name in the target
+            // folder and delete the original device file, in one operation.
+            // (The temp copy does not exist until PerformOperations runs, so its
+            // IShellItem cannot be queued for rename here — that's phase 2.)
+            let original_item = parse_shell_item_original(&original_name, &pidl_bytes)?;
+            copy_item(&op, &local_item, &dest, Some(&target.name))?;
+            unsafe { op.DeleteItem(&original_item, None) }
+                .map_err(|e| AppError::Other(format!("DeleteItem: {e}")))?;
+            perform(&op)?;
+
+            // Phase 2 — rename the device copy from the temp name to the
+            // original name. The local workspace file is deliberately NOT
+            // renamed, so the caller's delete_local_file(local_path) still
+            // works after delivery.
+            let temp_item = parse_shell_child(&dest, &target.name)?;
+            let op2 = new_file_operation()?;
+            let rename = HSTRING::from(&target.rename_from);
+            unsafe { op2.RenameItem(&temp_item, &rename, None) }
+                .map_err(|e| AppError::Other(format!("RenameItem: {e}")))?;
+            perform(&op2).map_err(|e| AppError::Other(format!(
+                "RenameItem failed: the original was already deleted on the device and the compressed file is stored under \"{}\"; renaming to \"{}\" failed: {e}",
+                target.name, target.rename_from
+            )))?;
+        } else {
+            copy_item(&op, &local_item, &dest, Some(&target.name))?;
+            perform(&op)?;
         }
-        perform(&op)?;
         Ok(DeliverResult { note: None })
     }).await
 }
@@ -492,6 +513,14 @@ mod tests {
         assert!(has_enough_space(1024, 512));
         assert!(!has_enough_space(512, 1024));
         assert!(has_enough_space(0, 0)); // unknown size -> skip
+    }
+
+    #[test]
+    fn workspace_drive_detects_drive_letter() {
+        assert_eq!(workspace_drive(r"C:\Users\me\Documents\Smol\imports"), r"C:\");
+        assert_eq!(workspace_drive(r"D:\Smol\imports\abc"), r"D:\");
+        assert_eq!(workspace_drive("Smol/imports"), r"C:\"); // no drive letter -> fallback
+        assert_eq!(workspace_drive(""), r"C:\"); // unparsable -> fallback
     }
 
     #[test]
