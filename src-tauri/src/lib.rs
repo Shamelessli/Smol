@@ -4,6 +4,7 @@ mod error;
 mod fs_bridge;
 mod jobs;
 mod probe;
+mod spike; // TEMP SPIKE: MTP path format diagnostic commands (removed after spike)
 mod thumbs;
 
 use commands::compress_video::{compress_video, cancel_job, ActiveJobPids};
@@ -36,6 +37,8 @@ pub fn run() {
             compress_image,
             compress_pdf,
             cancel_job,
+            spike::spike_parse_path, // TEMP SPIKE
+            spike::spike_echo,       // TEMP SPIKE
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

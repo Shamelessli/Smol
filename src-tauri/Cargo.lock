@@ -4369,6 +4369,7 @@ dependencies = [
  "trash",
  "uuid",
  "webp",
+ "windows 0.61.3",
 ]
 
 [[package]]

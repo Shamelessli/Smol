@@ -37,4 +37,6 @@ mozjpeg = "0.10"
 oxipng = "9"
 webp = "0.3"
 lopdf = "0.40.0"
+# TEMP SPIKE: windows crate for SHParseDisplayName MTP path verification (keep dep after spike)
+windows = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Com", "Win32_UI_Shell"] }
 

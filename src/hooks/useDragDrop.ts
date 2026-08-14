@@ -66,7 +66,7 @@ export function useDragDrop() {
     let mounted = true;
     const setup = async () => {
       const win = getCurrentWebviewWindow();
-      const u = await win.onDragDropEvent((event) => {
+      const u = await win.onDragDropEvent(async (event) => {
         if (event.payload.type === "over" || event.payload.type === "enter") {
           setIsDraggingOver(true);
         } else if (event.payload.type === "leave") {
@@ -74,6 +74,15 @@ export function useDragDrop() {
         } else if (event.payload.type === "drop") {
           setIsDraggingOver(false);
           const rawPaths = event.payload.paths;
+          // TEMP SPIKE: log every delivered path + parse outcome
+          for (const p of rawPaths) {
+            console.log("[spike] delivered path:", p);
+            try {
+              const { invoke } = await import("@tauri-apps/api/core");
+              const parses = await invoke<boolean>("spike_parse_path", { displayPath: p });
+              console.log("[spike] SHParseDisplayName:", parses, "| path:", p);
+            } catch (e) { console.log("[spike] error", e); }
+          }
           if (rawPaths && rawPaths.length > 0) {
             void enqueuePaths(rawPaths);
           }
