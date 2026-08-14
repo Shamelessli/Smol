@@ -31,6 +31,7 @@ spike 内容（在实现主任务前完成）：
    - 若可解析 → 按本设计实现。
    - 若不可解析但能拿到可复制信息 → 改用**替代方案**（见下文"方案 B"）。
    - 若完全不可行 → 冻结为"仅引导提示"。
+   - **custom 模式三态结论**：若 `open({ directory: true })` 选不到 MTP 目录 → custom 模式对设备文件给 toast「无法选择设备目录」并按 **same-folder 行为处理**（或要求用户选本地目录）。spike 必须明确此回退，否则 custom 从源头不可用。可选另一方案：custom 模式对设备文件仅允许本地目录。
 
 ### 替代方案 B（spike 失败时的回退）
 
@@ -49,7 +50,7 @@ MTP 原文件 → Shell API 导入本地工作区（唯一子目录） → 本�
 | same-folder | 写回原文件同目录，新文件 `{name}_smol{ext}`（按文件名模式），设备原文件保留 |
 | subfolder | 写回原目录下的 `smol/` 子目录（后端自动创建；创建失败回退原目录并提示） |
 | custom | 写到用户选择的目录（`deliver_output` 内部自动区分本地/设备目录） |
-| replace | 用压缩结果替换设备原文件。三步入队、一次 `PerformOperations`：`CopyItem` 临时名（`{stem}.smol_tmp{ext}`）→ `DeleteItem` 原文件 → `RenameItem` 临时名→原文件名（规避 Windows 同名自动改名，见下文） |
+| replace | 用压缩结果替换设备原文件。三步入队、一次 `PerformOperations`：`CopyItem` 临时名（`{stem}.{uuid8}.smol_tmp{ext}`，**uuid8 防上次失败残留同名触发自动改名**）→ `DeleteItem` 原文件 → `RenameItem` 临时名→原文件名 |
 
 ## 清理规则（压缩成功后）
 
@@ -58,7 +59,7 @@ MTP 原文件 → Shell API 导入本地工作区（唯一子目录） → 本�
   - 写回成功 → 删除（结果已在设备）
   - 写回失败 → **保留**本地输出，toast「已压缩，但写回设备失败，结果保存在本地」
 - 已最优（outputLarger）→ 设备原文件保留，删除本地导入副本（设备已有原文件）
-- **replace 的命名冲突（关键）**：MTP 设备无回收站，不能像本地 `replace_original`（fs_bridge.rs:168）那样"先回收原文件"。但"直接 CopyItem 用原名到同目录"会触发 Windows **同名自动改名**——设备上已有 `IMG_123.jpg`，CopyItem 会把它写成 `IMG_123 (2).jpg` 或弹覆盖确认，随后删除原文件后用户得到的是错名文件。因此 replace 必须用**三步入队、一次 `PerformOperations`**：`CopyItem`（临时名 `{stem}.smol_tmp{ext}`）→ `DeleteItem`（原文件）→ `RenameItem`（临时名 → 原文件名）。全程一个操作集，语义更原子。
+- **replace 的命名冲突（关键）**：MTP 设备无回收站，不能像本地 `replace_original`（fs_bridge.rs:168）那样"先回收原文件"。但"直接 CopyItem 用原名到同目录"会触发 Windows **同名自动改名**——设备上已有 `IMG_123.jpg`，CopyItem 会把它写成 `IMG_123 (2).jpg` 或弹覆盖确认，随后删除原文件后用户得到的是错名文件。因此 replace 必须用**三步入队、一次 `PerformOperations`**：`CopyItem`（临时名 `{stem}.{uuid8}.smol_tmp{ext}`）→ `DeleteItem`（原文件）→ `RenameItem`（临时名 → 原文件名）。全程一个操作集，语义更原子。**临时名含 uuid8**：若上次 replace 中途失败在设备残留同名临时文件，本次 CopyItem 不会撞名（无残留顾虑）。
 - **replace 部分失败中间态**：三步入队任一步失败 → 操作集整体回滚语义不保证（IFileOperation 部分成功可能残留临时文件或原文件），toast 说明实际状态（如「写回失败，临时文件与原件并存于设备，请检查」），**不丢数据**。
 - **启动 GC**：App 启动时清理工作区**早于 N 分钟（默认 60）的子目录**（崩溃残留的中间文件）。不用"清空全部"——避免多实例冷启时清掉另一实例在途的 `{uuid}\` 导入副本。
 
@@ -81,7 +82,7 @@ MTP 原文件 → Shell API 导入本地工作区（唯一子目录） → 本�
       "Win32_Storage_FileSystem",
   ] }
   ```
-  （Cargo.lock 已含传递依赖 windows 0.61，直接声明只增加 feature，不引入新版本。）
+  （Cargo.lock 已含传递依赖 windows 0.61，直接声明只增加 feature，不引入新版本。读 `System.Size` 走 `IShellItem2::GetPropertyStore` → `IPropertyStore::GetValue`，子 feature 常被拆分——若编译报 `IPropertyStore`/`SHParseDisplayName` 缺失，追加 `Win32_UI_Shell_PropertiesSystem`。）
 
 ### COM 线程模型（关键，易踩坑）
 
@@ -105,10 +106,10 @@ Tauri 异步命令运行在 Tokio 工作线程上，**未初始化 COM**；直�
    - 不足 → 返回磁盘不足错误，前端复用 `disk_full_hint` 文案。
    - `SHParseDisplayName` 解析 MTP 路径 → `IFileOperation::CopyItem` 到 `{workspace}\{uuid}` → `PerformOperations` → 返回本地副本 `PathInfo`。
 3. `deliver_output(local_path, mode, import_source_path, custom_output_dir, new_name, original_name) -> DeliverResult` — 压缩结果交付到设备，**单个 `spawn_blocking` 闭包内完成**。内部：
-   1. **入口硬卡（对齐 fs_bridge.rs:158）**：`local_path` 的大小必须严格小于 `import_source_path` 原文件大小，否则拒绝（防御 `outputLarger` 只在前端判断的漏洞）。
+   1. **入口硬卡（对齐 fs_bridge.rs:158，仅 replace 模式）**：仅当 `mode == replace` 时要求 `local_path` 大小严格小于 `import_source_path` 原文件大小，否则拒绝。**非替换模式（same-folder/subfolder/custom）原文件保留不动，允许相等/略大的输出**（与现有非导入路径的 `outputLarger` 语义一致），硬卡不适用于它们。
    2. 调纯函数 `resolve_device_target(...)` 得目标（见下）。
    3. 低层复制（本地目录 → `std::fs::copy`；shell 目录 → `SHParseDisplayName` + `IFileOperation::CopyItem`；`dest_folder` 不存在自动创建，subfolder 建目录失败回退原目录）。
-   4. `replace` 模式：三步入队到**同一 IFileOperation**——`CopyItem`（临时名 `{stem}.smol_tmp{ext}`）→ `DeleteItem`（原文件）→ `RenameItem`（临时名→原文件名）→ 一次 `PerformOperations`。
+   4. `replace` 模式：三步入队到**同一 IFileOperation**——`CopyItem`（临时名 `{stem}.{salt}.smol_tmp{ext}`，salt=8 位短 uuid）→ `DeleteItem`（原文件）→ `RenameItem`（临时名→原文件名）→ 一次 `PerformOperations`。
    5. 返回 `DeliverResult { note: Option<String> }`（note 如「设备上无法创建 smol 子目录，已写入原目录」）。
 4. `delete_local_file(path) -> ()` — 清理本地副本。
 
@@ -116,11 +117,11 @@ Tauri 异步命令运行在 Tokio 工作线程上，**未初始化 COM**；直�
 
 ### 可测纯逻辑（提取为纯函数 + `cargo test`）
 
-- `resolve_device_target(mode, import_source_path, custom_output_dir, new_name, original_name) -> DeviceTarget` — 模式 → 设备目标的纯映射（主要测试面）：
+- `resolve_device_target(mode, import_source_path, custom_output_dir, new_name, original_name, salt) -> DeviceTarget` — 模式 → 设备目标的纯映射（主要测试面）：
   ```rust
   struct DeviceTarget {
       dest_folder: String,    // 目标目录
-      name: String,           // 写入文件名（replace 为临时名 {stem}.smol_tmp{ext}）
+      name: String,           // 写入文件名（replace 为临时名 {stem}.{salt}.smol_tmp{ext}）
       create_folder: bool,    // subfolder 需建 smol/，失败回退
       replace_original: bool, // replace 模式（驱动后续 DeleteItem+RenameItem 两步）
       rename_from: String,    // replace 时临时名 → 原文件名；否则空
@@ -129,7 +130,8 @@ Tauri 异步命令运行在 Tokio 工作线程上，**未初始化 COM**；直�
   - same-folder → dest=父目录，name=new_name，create=false，replace=false
   - subfolder → dest=父目录`\smol`，name=new_name，create=true，replace=false
   - custom → dest=custom_output_dir，name=new_name，create=false，replace=false
-  - replace → dest=父目录，name=`{stem}.smol_tmp{ext}`，create=false，replace=true，rename_from=original_name
+  - replace → dest=父目录，name=`{stem}.{salt}.smol_tmp{ext}`，create=false，replace=true，rename_from=original_name
+  - `salt` 由 `deliver_output` 传入（8 位短 uuid），保证临时名唯一、无残留撞名。`resolve_device_target` 保持纯函数（salt 作为入参），仍可 `cargo test`。
 - `compute_import_dir(workspace, uuid) -> String` — 唯一子目录拼接。
 - `has_enough_space(free_bytes, needed_bytes) -> bool` — 磁盘预检判定（`needed_bytes == 0` → 返回 true，即跳过预检）。
 - `disk_full_hint` — 复用已有（error.rs，已有测试）。
@@ -182,7 +184,11 @@ importSourcePath?: string;    // 设备上的原始路径，用于计算写回�
 
 ### 压缩后处理（`src/hooks/useCompression.ts`，仅 `job.imported`）
 
-**本地输出暂存**：imported Job 的压缩输出统一写到工作区子目录。**文件名派生**：复用现有 `buildOutputPath` 的命名逻辑，仅取其派生出的**文件名**（`{pattern 展开}`，如 `IMG_123_smol.jpg`），目录替换为工作区子目录——即"模式派生名" = `buildOutputPath` 去掉目录部分。随后调 `deliverOutput(localOutput, mode, importSourcePath, customOutputDir, 模式派生名, 原文件名)`：
+**本地输出暂存**：imported Job 的压缩输出统一写到工作区子目录。**文件名派生**：
+- 非 replace 模式：复用现有 `buildOutputPath` 的命名逻辑，仅取其派生出的**文件名**（`{pattern 展开}`，如 `IMG_123_smol.jpg`），目录替换为工作区子目录——即"模式派生名" = `buildOutputPath` 去掉目录部分。
+- **replace 模式**：`buildOutputPath` 的类型不含 `"replace"`（签名是 `same-folder|subfolder|custom`），不能把 `outputMode="replace"` 传进去。改用 `buildReplaceIntermediatePath` 派生中间名（`{name}_smol{ext}`），目录替换为工作区 `{uuid}\`。
+
+随后调 `deliverOutput(localOutput, mode, importSourcePath, customOutputDir, 模式派生名, 原文件名)`：
 
 - 模式→设备目标映射、subfolder 建目录回退、replace 先复制后删原文件，**全部在 Rust `deliver_output` 内部完成**。
 - 返回的 `note` 非空时 toast 提示（如「无法在设备创建 smol 子目录，已写入原目录」）。
