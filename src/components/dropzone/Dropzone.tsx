@@ -38,6 +38,17 @@ export function Dropzone({ isDraggingOver, hasFiles }: DropzoneProps) {
     if (!selected) return;
     const paths = Array.isArray(selected) ? selected : [selected];
 
+    // TEMP SPIKE: log each dialog-selected path + parse outcome (mirrors drag-drop spike in useDragDrop.ts)
+    for (const path of paths) {
+      // TEMP SPIKE: log each dialog-selected path + parse outcome
+      console.log("[spike] dialog path:", path);
+      try {
+        const { invoke } = await import("@tauri-apps/api/core");
+        const parses = await invoke<boolean>("spike_parse_path", { displayPath: path });
+        console.log("[spike] SHParseDisplayName:", parses, "| path:", path);
+      } catch (e) { console.log("[spike] error", e); }
+    }
+
     const toAdd: NewJobInput[] = [];
 
     for (const path of paths) {
