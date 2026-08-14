@@ -63,6 +63,18 @@ export function Dropzone({ isDraggingOver, hasFiles }: DropzoneProps) {
     }
   }
 
+  // TEMP SPIKE: manually trigger the native `spike_pick` (IFileOpenDialog) probe
+  // so a human can verify MTP path handling on a real device.
+  async function handleSpikePick() {
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      const lines = await invoke<string[]>("spike_pick");
+      console.log("[spike-pick]", lines.join("\n"));
+    } catch (e) {
+      console.log("[spike-pick] error", e);
+    }
+  }
+
   function handleClearAll() {
     const currentState = useJobsStore.getState();
     const prevJobs = { ...currentState.jobs };
@@ -126,13 +138,22 @@ export function Dropzone({ isDraggingOver, hasFiles }: DropzoneProps) {
                 <Upload className="h-10 w-10 opacity-50" />
               </motion.div>
               <EmptyState isDraggingOver={isDraggingOver} />
-              <button
-                onClick={handleOpenDialog}
-                className="flex items-center gap-2 px-4 py-2 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-sm transition-colors"
-              >
-                <Upload className="h-4 w-4" />
-                Open files…
-              </button>
+              <div className="flex items-center gap-4">
+                <button
+                  onClick={handleOpenDialog}
+                  className="flex items-center gap-2 px-4 py-2 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-sm transition-colors"
+                >
+                  <Upload className="h-4 w-4" />
+                  Open files…
+                </button>
+                {/* TEMP SPIKE */}
+                <button
+                  onClick={handleSpikePick}
+                  className="flex items-center gap-2 px-4 py-2 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-sm transition-colors"
+                >
+                  SPIKE pick
+                </button>
+              </div>
             </motion.div>
           </motion.div>
         ) : (
