@@ -79,21 +79,44 @@ unsafe fn pick_via_shell_dialog() -> Vec<String> {
 }
 
 /// TEMP SPIKE: read both display names, re-parse the parsing name, and format
-/// one probe record: `parsing=...\nfilesys=...\nparse=<true|false>`.
+/// one probe record: `parsing=...\nfilesys=...\nparse=<true|false>`. Also probe
+/// the parent folder item: whether its parsing name (`SIGDN_DESKTOPABSOLUTEPARSING`)
+/// round-trips through `SHParseDisplayName` (this decides if the MTP write-back
+/// step can resolve the destination FOLDER by string), appended as
+/// `parentparsing=...\nparentparse=<true|false>` (both `ERR` if `GetParent` fails).
 unsafe fn format_display_names(item: &IShellItem) -> String {
     unsafe {
         let parsing = read_display_name(item, SIGDN_DESKTOPABSOLUTEPARSING);
         let filesys = read_display_name(item, SIGDN_FILESYSPATH);
         // Verify the shell parsing name round-trips through SHParseDisplayName
         // (windows 0.61 yields a raw PIDL, as in spike_parse_path).
-        let name = HSTRING::from(&parsing);
+        let parse_ok = parse_round_trips(&parsing);
+        let (parentparsing, parentparse) = match item.GetParent() {
+            Ok(parent) => {
+                let p = read_display_name(&parent, SIGDN_DESKTOPABSOLUTEPARSING);
+                let p_ok = parse_round_trips(&p);
+                (p, format!("{p_ok}"))
+            }
+            Err(e) => (format!("ERR({e})"), String::from("ERR")),
+        };
+        format!(
+            "parsing={parsing}\nfilesys={filesys}\nparse={parse_ok}\nparentparsing={parentparsing}\nparentparse={parentparse}"
+        )
+    }
+}
+
+/// TEMP SPIKE: check whether `SHParseDisplayName` can re-parse a parsing name
+/// string. windows 0.61 yields a raw PIDL (ITEMIDLIST), as in spike_parse_path.
+unsafe fn parse_round_trips(parsing: &str) -> bool {
+    unsafe {
+        let name = HSTRING::from(parsing);
         let mut pidl: *mut ITEMIDLIST = std::ptr::null_mut();
         let hr = SHParseDisplayName(&name, None, &mut pidl, 0, None);
-        let parse_ok = hr.is_ok() && !pidl.is_null();
+        let ok = hr.is_ok() && !pidl.is_null();
         if !pidl.is_null() {
             ILFree(Some(pidl as *const ITEMIDLIST));
         }
-        format!("parsing={parsing}\nfilesys={filesys}\nparse={parse_ok}")
+        ok
     }
 }
 
