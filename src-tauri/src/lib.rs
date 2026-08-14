@@ -1,5 +1,6 @@
 mod commands;
 mod encoders;
+mod import;
 mod error;
 mod fs_bridge;
 mod jobs;
