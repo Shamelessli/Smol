@@ -38,17 +38,6 @@ export function Dropzone({ isDraggingOver, hasFiles }: DropzoneProps) {
     if (!selected) return;
     const paths = Array.isArray(selected) ? selected : [selected];
 
-    // TEMP SPIKE: log each dialog-selected path + parse outcome (mirrors drag-drop spike in useDragDrop.ts)
-    for (const path of paths) {
-      // TEMP SPIKE: log each dialog-selected path + parse outcome
-      console.log("[spike] dialog path:", path);
-      try {
-        const { invoke } = await import("@tauri-apps/api/core");
-        const parses = await invoke<boolean>("spike_parse_path", { displayPath: path });
-        console.log("[spike] SHParseDisplayName:", parses, "| path:", path);
-      } catch (e) { console.log("[spike] error", e); }
-    }
-
     const toAdd: NewJobInput[] = [];
 
     for (const path of paths) {
@@ -60,18 +49,6 @@ export function Dropzone({ isDraggingOver, hasFiles }: DropzoneProps) {
     }
     if (toAdd.length > 0) {
       useJobsStore.getState().addFiles(toAdd);
-    }
-  }
-
-  // TEMP SPIKE: manually trigger the native `spike_pick` (IFileOpenDialog) probe
-  // so a human can verify MTP path handling on a real device.
-  async function handleSpikePick() {
-    try {
-      const { invoke } = await import("@tauri-apps/api/core");
-      const lines = await invoke<string[]>("spike_pick");
-      console.log("[spike-pick]", lines.join("\n"));
-    } catch (e) {
-      console.log("[spike-pick] error", e);
     }
   }
 
@@ -145,13 +122,6 @@ export function Dropzone({ isDraggingOver, hasFiles }: DropzoneProps) {
                 >
                   <Upload className="h-4 w-4" />
                   Open files…
-                </button>
-                {/* TEMP SPIKE */}
-                <button
-                  onClick={handleSpikePick}
-                  className="flex items-center gap-2 px-4 py-2 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-sm transition-colors"
-                >
-                  SPIKE pick
                 </button>
               </div>
             </motion.div>
