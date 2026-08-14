@@ -131,11 +131,11 @@ export async function startSqueeze(): Promise<void> {
 
         // Replace mode: move original to Recycle Bin, put compressed in its place.
         // outputLarger (compressed ≥ original) → original kept, nothing replaced.
-        if (outputMode === "replace" && !result.outputLarger) {
+        if (job.imported) {
+          await handleImportedJob(jobId, job, result, outputMode);
+        } else if (outputMode === "replace" && !result.outputLarger) {
           const finalPath = await replaceOriginal(result.outputPath, job.inputPath);
           useJobsStore.getState().setJobOutput(jobId, finalPath, result.outputBytes, true);
-        } else if (job.imported) {
-          await handleImportedJob(jobId, job, result, outputMode);
         } else {
           useJobsStore.getState().setJobOutput(jobId, result.outputPath, result.outputBytes);
         }
