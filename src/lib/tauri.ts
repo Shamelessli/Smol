@@ -171,6 +171,44 @@ export const compressPdf = (
 export const replaceOriginal = (compressedPath: string, originalPath: string) =>
   invoke<string>("replace_original", { compressedPath, originalPath });
 
+export interface PickResult {
+  isLocal: boolean;
+  path: string | null;
+  key: string | null;
+  localPath: string | null;
+  name: string | null;
+  size: number | null;
+  parentIdListB64: string | null;
+}
+
+export interface DeliverResult { note: string | null }
+
+/** Create (and GC) the local import workspace; returns its path. */
+export const ensureImportWorkspace = () =>
+  invoke<string>("ensure_import_workspace");
+
+/** Open the shell picker and import device files to the workspace. */
+export const pickImport = () =>
+  invoke<PickResult[]>("pick_import");
+
+/** Deliver a compressed local file to the device (PIDL-based write-back). */
+export const deliverOutput = (
+  localPath: string,
+  key: string,
+  mode: "same-folder" | "subfolder" | "custom" | "replace",
+  customOutputDir: string | null,
+  newName: string,
+  originalName: string,
+  parentIdListB64: string,
+) =>
+  invoke<DeliverResult>("deliver_output", {
+    localPath, key, mode, customOutputDir, newName, originalName, parentIdListB64,
+  });
+
+/** Delete a local file (imported copy / staged output). */
+export const deleteLocalFile = (path: string) =>
+  invoke<void>("delete_local_file", { path });
+
 /** Open Windows Explorer with the given file highlighted in its parent folder. */
 export const revealInExplorer = (path: string) =>
   invoke<void>("reveal_in_explorer", { path });

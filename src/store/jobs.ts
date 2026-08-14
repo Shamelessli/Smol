@@ -7,7 +7,7 @@ import { estimateOutputBytes } from "@/lib/estimate";
 // ── Public type for the addFiles payload ──────────────────────────────────────
 // Contains only what the caller knows at drop time; the rest is initialised by
 // the store.
-export type NewJobInput = Pick<Job, "id" | "inputPath" | "name" | "kind" | "inputBytes">;
+export type NewJobInput = Pick<Job, "id" | "inputPath" | "name" | "kind" | "inputBytes" | "imported" | "importParentIdListB64">;
 
 // ── Store state & actions ────────────────────────────────────────────────────
 

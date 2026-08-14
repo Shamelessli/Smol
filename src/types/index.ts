@@ -36,6 +36,10 @@ export interface Job {
   inputPath: string;       // absolute filesystem path
   name: string;            // display name (filename)
   outputPath?: string;
+  /** True when the file was auto-imported from a device (MTP) into the local workspace. */
+  imported?: boolean;
+  /** Base64 of the device parent folder's shell PIDL — the write-back destination. */
+  importParentIdListB64?: string;
   /** True when the compressed file replaced the original (original moved to Recycle Bin). */
   replacedOriginal?: boolean;
   kind: FileKind;
