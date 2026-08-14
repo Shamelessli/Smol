@@ -50,7 +50,7 @@ MTP 原文件 → Shell API 导入本地工作区（唯一子目录） → 本�
 | same-folder | 写回原文件同目录，新文件 `{name}_smol{ext}`（按文件名模式），设备原文件保留 |
 | subfolder | 写回原目录下的 `smol/` 子目录（后端自动创建；创建失败回退原目录并提示） |
 | custom | 写到用户选择的目录（`deliver_output` 内部自动区分本地/设备目录） |
-| replace | 用压缩结果替换设备原文件。三步入队、一次 `PerformOperations`：`CopyItem` 临时名（`{stem}.{uuid8}.smol_tmp{ext}`，**uuid8 防上次失败残留同名触发自动改名**）→ `DeleteItem` 原文件 → `RenameItem` 临时名→原文件名 |
+| replace | 用压缩结果替换设备原文件。三步入队、一次 `PerformOperations`：`CopyItem` 临时名（`{stem}.{salt}.smol_tmp{ext}`，salt=8 位短随机串，防上次失败残留同名触发自动改名）→ `DeleteItem` 原文件 → `RenameItem` 临时名→原文件名 |
 
 ## 清理规则（压缩成功后）
 
@@ -59,7 +59,7 @@ MTP 原文件 → Shell API 导入本地工作区（唯一子目录） → 本�
   - 写回成功 → 删除（结果已在设备）
   - 写回失败 → **保留**本地输出，toast「已压缩，但写回设备失败，结果保存在本地」
 - 已最优（outputLarger）→ 设备原文件保留，删除本地导入副本（设备已有原文件）
-- **replace 的命名冲突（关键）**：MTP 设备无回收站，不能像本地 `replace_original`（fs_bridge.rs:168）那样"先回收原文件"。但"直接 CopyItem 用原名到同目录"会触发 Windows **同名自动改名**——设备上已有 `IMG_123.jpg`，CopyItem 会把它写成 `IMG_123 (2).jpg` 或弹覆盖确认，随后删除原文件后用户得到的是错名文件。因此 replace 必须用**三步入队、一次 `PerformOperations`**：`CopyItem`（临时名 `{stem}.{uuid8}.smol_tmp{ext}`）→ `DeleteItem`（原文件）→ `RenameItem`（临时名 → 原文件名）。全程一个操作集，语义更原子。**临时名含 uuid8**：若上次 replace 中途失败在设备残留同名临时文件，本次 CopyItem 不会撞名（无残留顾虑）。
+- **replace 的命名冲突（关键）**：MTP 设备无回收站，不能像本地 `replace_original`（fs_bridge.rs:168）那样"先回收原文件"。但"直接 CopyItem 用原名到同目录"会触发 Windows **同名自动改名**——设备上已有 `IMG_123.jpg`，CopyItem 会把它写成 `IMG_123 (2).jpg` 或弹覆盖确认，随后删除原文件后用户得到的是错名文件。因此 replace 必须用**三步入队、一次 `PerformOperations`**：`CopyItem`（临时名 `{stem}.{salt}.smol_tmp{ext}`）→ `DeleteItem`（原文件）→ `RenameItem`（临时名 → 原文件名）。全程一个操作集，语义更原子。**临时名含 salt（8 位短随机串）**：若上次 replace 中途失败在设备残留同名临时文件，本次 CopyItem 不会撞名（无残留顾虑）。
 - **replace 部分失败中间态**：三步入队任一步失败 → 操作集整体回滚语义不保证（IFileOperation 部分成功可能残留临时文件或原文件），toast 说明实际状态（如「写回失败，临时文件与原件并存于设备，请检查」），**不丢数据**。
 - **启动 GC**：App 启动时清理工作区**早于 N 分钟（默认 60）的子目录**（崩溃残留的中间文件）。不用"清空全部"——避免多实例冷启时清掉另一实例在途的 `{uuid}\` 导入副本。
 
@@ -153,7 +153,7 @@ Tauri 异步命令运行在 Tokio 工作线程上，**未初始化 COM**；直�
 - replace 命名冲突 → 三步入队 + 一次 `PerformOperations`（临时名复制 → 删原文件 → 改名）。
 - replace/交付部分失败 → 中间态 toast（不丢数据）。
 - COM 未初始化 / CopyItem 只入队 → `spawn_blocking` + `CoInitializeEx(STA)` + `PerformOperations`。
-- `deliver_output` 缺少大小硬卡 → 入口校验 `local_path` 严格小于原文件。
+- `deliver_output` 缺少大小硬卡 → 入口校验（**仅 replace 模式**）`local_path` 严格小于原文件；非替换模式允许相等/略大输出。
 
 ## 前端设计
 
