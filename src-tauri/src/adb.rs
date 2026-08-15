@@ -80,6 +80,28 @@ pub fn adb_path() -> Result<PathBuf, AppError> {
     ))
 }
 
+/// Build a useful adb error message. Connection problems (no device / offline /
+/// unauthorized) get the USB-debugging guidance; otherwise the device-side
+/// stderr tail (e.g. "Permission denied") is surfaced so the real cause shows.
+fn adb_error(stderr: &[u8], context: &str) -> AppError {
+    let tail = String::from_utf8_lossy(stderr)
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .last()
+        .map(|s| s.trim().to_string())
+        .unwrap_or_default();
+    let lower = tail.to_lowercase();
+    let conn = lower.contains("no devices")
+        || lower.contains("offline")
+        || lower.contains("unauthorized");
+    let msg = if conn || tail.is_empty() {
+        format!("{context}：请确认设备已连接并启用 USB 调试")
+    } else {
+        format!("{context}：{tail}")
+    };
+    AppError::Other(msg)
+}
+
 #[tauri::command]
 pub async fn list_device_dir(path: String) -> Result<Vec<DeviceEntry>, AppError> {
     let entries = tauri::async_runtime::spawn_blocking(move || -> Result<Vec<DeviceEntry>, AppError> {
@@ -90,9 +112,7 @@ pub async fn list_device_dir(path: String) -> Result<Vec<DeviceEntry>, AppError>
             .output()
             .map_err(|e| AppError::Other(format!("adb shell failed: {e}")))?;
         if !out.status.success() {
-            return Err(AppError::Other(
-                "无法列出设备目录：请确认设备已连接并启用 USB 调试".into(),
-            ));
+            return Err(adb_error(&out.stderr, &format!("无法列出目录 {path}")));
         }
         Ok(parse_ls_output(&String::from_utf8_lossy(&out.stdout)))
     })
@@ -118,6 +138,7 @@ pub async fn pull_device_files(
 ) -> Result<Vec<PullResult>, AppError> {
     let pulled = tauri::async_runtime::spawn_blocking(move || -> Result<Vec<PullResult>, AppError> {
         let mut out = Vec::new();
+        let mut last_err: Option<Vec<u8>> = None;
         for remote in items {
             let uuid = uuid::Uuid::new_v4().simple().to_string();
             let dest = format!("{workspace}\\{uuid}");
@@ -126,13 +147,14 @@ pub async fn pull_device_files(
             let local = Path::new(&dest).join(&name);
             let mut cmd = adb_cmd()?;
             cmd.args(["pull", &remote]).arg(&local);
-            let st = cmd
-                .status()
+            let out_res = cmd
+                .output()
                 .map_err(|e| AppError::Other(format!("adb pull failed: {e}")))?;
-            if !st.success() {
+            if !out_res.status.success() {
                 // One bad item must not abort the whole batch: drop the empty
                 // uuid dir this pull created and move on to the next item.
                 let _ = std::fs::remove_dir_all(&dest);
+                last_err = Some(out_res.stderr);
                 continue;
             }
             let size = std::fs::metadata(&local).map(|m| m.len()).unwrap_or(0);
@@ -145,9 +167,8 @@ pub async fn pull_device_files(
             });
         }
         if out.is_empty() {
-            return Err(AppError::Other(
-                "adb pull 失败 — 请确认设备已连接并启用 USB 调试".into(),
-            ));
+            let stderr = last_err.unwrap_or_default();
+            return Err(adb_error(&stderr, "adb pull 失败"));
         }
         Ok(out)
     })
@@ -215,13 +236,11 @@ pub async fn deliver_to_device(
                     let target = format!("{}/{}", dir.trim_end_matches('/'), new_name);
                     let mut cmd = adb_cmd()?;
                     cmd.args(["push"]).arg(&local_path).arg(&target);
-                    let st = cmd
-                        .status()
+                    let out = cmd
+                        .output()
                         .map_err(|e| AppError::Other(format!("adb push failed: {e}")))?;
-                    if !st.success() {
-                        return Err(AppError::Other(
-                            "adb push 失败：请确认设备已连接并启用 USB 调试".into(),
-                        ));
+                    if !out.status.success() {
+                        return Err(adb_error(&out.stderr, "adb push 失败"));
                     }
                     Ok(DeliverResult {
                         note: None,
@@ -231,13 +250,11 @@ pub async fn deliver_to_device(
                 "replace" => {
                     let mut cmd = adb_cmd()?;
                     cmd.args(["push"]).arg(&local_path).arg(&remote_path);
-                    let st = cmd
-                        .status()
+                    let out = cmd
+                        .output()
                         .map_err(|e| AppError::Other(format!("adb push failed: {e}")))?;
-                    if !st.success() {
-                        return Err(AppError::Other(
-                            "adb push 失败：请确认设备已连接并启用 USB 调试".into(),
-                        ));
+                    if !out.status.success() {
+                        return Err(adb_error(&out.stderr, "adb push 失败"));
                     }
                     Ok(DeliverResult {
                         note: None,

@@ -4,14 +4,13 @@ import { listDeviceDir } from "@/lib/tauri";
 import type { DeviceEntry } from "@/lib/tauri";
 import { formatBytesExact } from "@/lib/format";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { extractErrorMessage } from "@/lib/errors";
 
 // ── Device paths ──────────────────────────────────────────────────────────────
 // Android's /sdcard is a symlink to /storage/emulated/0 on essentially every
 // device — a safe starting point for the browser.
 const ROOT_DIR = "/sdcard";
 const COMMON_DIRS = ["DCIM", "Pictures", "Download", "Movies", "Music"];
-
-const USB_DEBUG_GUIDANCE = "未检测到设备或未授权 — 请启用 USB 调试并授权";
 
 function joinRemote(dir: string, name: string): string {
   return `${dir.replace(/\/+$/, "")}/${name}`;
@@ -87,8 +86,7 @@ export function DeviceBrowser({
         if (cancelled) return;
         setEntries([]);
         setLoadedDir(cwd);
-        const raw = err instanceof Error ? err.message : String(err);
-        setError(`${USB_DEBUG_GUIDANCE}（${raw}）`);
+        setError(extractErrorMessage(err));
       }
     })();
     return () => {
