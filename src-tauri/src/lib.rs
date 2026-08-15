@@ -1,3 +1,4 @@
+mod adb;
 mod commands;
 mod encoders;
 mod error;
@@ -6,6 +7,7 @@ mod jobs;
 mod probe;
 mod thumbs;
 
+use adb::{deliver_to_device, list_device_dir, pull_device_files};
 use commands::compress_video::{compress_video, cancel_job, ActiveJobPids};
 use commands::compress_audio::compress_audio;
 use commands::compress_image::compress_image;
@@ -36,6 +38,9 @@ pub fn run() {
             compress_image,
             compress_pdf,
             cancel_job,
+            list_device_dir,
+            pull_device_files,
+            deliver_to_device,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

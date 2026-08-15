@@ -51,7 +51,10 @@
       "binaries/gs"
     ],
     "resources": {
-      "binaries/gsdll64.dll": "gsdll64.dll"
+      "binaries/gsdll64.dll": "gsdll64.dll",
+      "binaries/adb.exe": "adb.exe",
+      "binaries/AdbWinApi.dll": "AdbWinApi.dll",
+      "binaries/AdbWinUsbApi.dll": "AdbWinUsbApi.dll"
     },
     "windows": {
       "nsis": {

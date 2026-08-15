@@ -5,7 +5,7 @@
   "description": "A fast, native Windows desktop app for compressing media.",
   "type": "module",
   "scripts": {
-    "postinstall": "node scripts/fetch-ffmpeg.mjs",
+    "postinstall": "node scripts/fetch-adb.mjs && node scripts/fetch-ffmpeg.mjs",
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
