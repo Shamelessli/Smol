@@ -128,18 +128,31 @@ fn adb_cmd() -> Result<std::process::Command, AppError> {
     Ok(cmd)
 }
 
-/// Bundled `adb.exe` next to the app exe, else on PATH.
+/// Resolve the adb binary, preferring the BUNDLED one so the app always talks
+/// to its own adb server (different adb.exe versions each manage their own
+/// server, which causes device-visibility flapping):
+/// 1. bundled next to the running exe (production / NSIS resources),
+/// 2. the workspace's fetched binary (`src-tauri\binaries\adb.exe`) in dev,
+/// 3. adb on PATH (last resort, e.g. Android Studio platform-tools).
 pub fn adb_path() -> Result<PathBuf, AppError> {
-    let self_dir = std::env::current_exe()
-        .ok()
-        .and_then(|p| p.parent().map(|d| d.to_path_buf()));
-    if let Some(dir) = self_dir {
-        let bundled = dir.join("adb.exe");
-        if bundled.exists() {
-            return Ok(bundled);
+    // 1. Production: adb.exe sits beside the app exe (tauri resources).
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            let bundled = dir.join("adb.exe");
+            if bundled.exists() {
+                return Ok(bundled);
+            }
         }
     }
-    // Fallback: adb installed on PATH (e.g. Android Studio platform-tools).
+    // 2. Dev: `env!("CARGO_MANIFEST_DIR")` is the crate dir (src-tauri) at
+    // build time, where scripts/fetch-adb.mjs drops adb.exe.
+    let manifest_adb = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("binaries")
+        .join("adb.exe");
+    if manifest_adb.exists() {
+        return Ok(manifest_adb);
+    }
+    // 3. Fallback: adb installed on PATH (e.g. Android Studio platform-tools).
     if let Ok(path_var) = std::env::var("PATH") {
         for dir in std::env::split_paths(&path_var) {
             let candidate = dir.join("adb.exe");
@@ -274,6 +287,52 @@ fn adb_error(stderr: &[u8], context: &str) -> AppError {
         format!("{context}：{tail}")
     };
     AppError::Other(msg)
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeviceStatus {
+    pub connected: bool,
+    /// "device" | "unauthorized" | "offline" | "none"
+    pub state: String,
+    pub serial: Option<String>,
+}
+
+/// Report the first device's connection state (for the UI status indicator).
+/// Does NOT try to recover — it is a read-only probe.
+#[tauri::command]
+pub async fn device_status() -> Result<DeviceStatus, AppError> {
+    tauri::async_runtime::spawn_blocking(|| {
+        let states = adb_device_states()?;
+        if let Some((serial, _)) = states.iter().find(|(_, s)| s == "device") {
+            return Ok(DeviceStatus {
+                connected: true,
+                state: "device".into(),
+                serial: Some(serial.clone()),
+            });
+        }
+        if let Some((serial, _)) = states.iter().find(|(_, s)| s == "unauthorized") {
+            return Ok(DeviceStatus {
+                connected: false,
+                state: "unauthorized".into(),
+                serial: Some(serial.clone()),
+            });
+        }
+        if let Some((serial, state)) = states.first() {
+            return Ok(DeviceStatus {
+                connected: false,
+                state: state.clone(),
+                serial: Some(serial.clone()),
+            });
+        }
+        Ok(DeviceStatus {
+            connected: false,
+            state: "none".into(),
+            serial: None,
+        })
+    })
+    .await
+    .map_err(|e| AppError::Other(format!("设备状态查询失败: {e}")))?
 }
 
 #[tauri::command]

@@ -1,10 +1,11 @@
 import { useEffect, useState } from "react";
-import { ArrowUp, File, Folder, Loader2, Smartphone, X } from "lucide-react";
-import { listDeviceDir } from "@/lib/tauri";
+import { ArrowUp, CheckSquare, File, Folder, Loader2, Smartphone, X } from "lucide-react";
+import { listDeviceDir, deviceStatus, type DeviceStatus } from "@/lib/tauri";
 import type { DeviceEntry } from "@/lib/tauri";
 import { formatBytesExact } from "@/lib/format";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { extractErrorMessage } from "@/lib/errors";
+import { fileKindFromPath } from "@/lib/kinds";
 
 // ── Device paths ──────────────────────────────────────────────────────────────
 // Android's /sdcard is a symlink to /storage/emulated/0 on essentially every
@@ -51,6 +52,27 @@ export function DeviceBrowser({
   const [loadedDir, setLoadedDir] = useState<string | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [error, setError] = useState<string | null>(null);
+  const [status, setStatus] = useState<DeviceStatus | null>(null);
+
+  // Poll the device connection state while the modal is open.
+  useEffect(() => {
+    if (!open) return;
+    let stopped = false;
+    const refresh = async () => {
+      try {
+        const s = await deviceStatus();
+        if (!stopped) setStatus(s);
+      } catch {
+        /* keep last known status */
+      }
+    };
+    void refresh();
+    const timer = setInterval(refresh, 2000);
+    return () => {
+      stopped = true;
+      clearInterval(timer);
+    };
+  }, [open]);
 
   // Loading is derived: the list is stale/spinning whenever the current dir
   // does not yet match the dir the last (a)sync list call finished for.
@@ -120,6 +142,17 @@ export function DeviceBrowser({
     });
   }
 
+  /** Select all files in the current directory, optionally only one kind. */
+  function selectAll(kind?: "video" | "audio" | "image" | "pdf") {
+    const next = new Set<string>();
+    for (const e of entries) {
+      if (e.isDir) continue;
+      if (kind && fileKindFromPath(e.name) !== kind) continue;
+      next.add(joinRemote(cwd, e.name));
+    }
+    setSelected(next);
+  }
+
   function handleConfirm() {
     onSelect(pickDirectory ? [cwd] : [...selected]);
   }
@@ -135,9 +168,34 @@ export function DeviceBrowser({
             <Smartphone className="h-5 w-5 text-indigo-400" />
             {pickDirectory ? "Choose device folder" : "Add from device"}
           </h2>
-          <button onClick={onClose} className="p-1 text-zinc-400 hover:text-zinc-200">
-            <X className="w-5 h-5" />
-          </button>
+          <div className="flex items-center gap-3">
+            {/* Device connection status */}
+            <div className="flex items-center gap-1.5 text-[11px]">
+              {status === null ? (
+                <span className="text-zinc-600 flex items-center gap-1.5">
+                  <Loader2 className="h-3 w-3 animate-spin" /> checking…
+                </span>
+              ) : status.connected ? (
+                <span className="text-emerald-400 flex items-center gap-1.5">
+                  <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />
+                  {status.serial}
+                </span>
+              ) : status.state === "unauthorized" ? (
+                <span className="text-amber-400 flex items-center gap-1.5">
+                  <span className="h-1.5 w-1.5 rounded-full bg-amber-400" />
+                  未授权 — 请在手机上允许 USB 调试
+                </span>
+              ) : (
+                <span className="text-red-400 flex items-center gap-1.5">
+                  <span className="h-1.5 w-1.5 rounded-full bg-red-400" />
+                  未连接
+                </span>
+              )}
+            </div>
+            <button onClick={onClose} className="p-1 text-zinc-400 hover:text-zinc-200">
+              <X className="w-5 h-5" />
+            </button>
+          </div>
         </div>
 
         {/* Current dir + up button */}
@@ -166,6 +224,48 @@ export function DeviceBrowser({
             </button>
           ))}
         </div>
+
+        {/* Selection action row (file mode only) */}
+        {!pickDirectory && (
+          <div className="flex items-center gap-1.5 px-4 pt-2 shrink-0 flex-wrap">
+            <button
+              onClick={() => selectAll()}
+              className="flex items-center gap-1 px-2 py-0.5 rounded-md bg-indigo-600/20 hover:bg-indigo-600/40 text-[10px] text-indigo-300 transition-colors"
+            >
+              <CheckSquare className="h-3 w-3" /> 全选
+            </button>
+            <button
+              onClick={() => selectAll("video")}
+              className="px-2 py-0.5 rounded-md bg-zinc-800/60 hover:bg-zinc-700 text-[10px] text-zinc-400 hover:text-zinc-200 transition-colors"
+            >
+              全选视频
+            </button>
+            <button
+              onClick={() => selectAll("audio")}
+              className="px-2 py-0.5 rounded-md bg-zinc-800/60 hover:bg-zinc-700 text-[10px] text-zinc-400 hover:text-zinc-200 transition-colors"
+            >
+              全选音频
+            </button>
+            <button
+              onClick={() => selectAll("image")}
+              className="px-2 py-0.5 rounded-md bg-zinc-800/60 hover:bg-zinc-700 text-[10px] text-zinc-400 hover:text-zinc-200 transition-colors"
+            >
+              全选图片
+            </button>
+            <button
+              onClick={() => selectAll("pdf")}
+              className="px-2 py-0.5 rounded-md bg-zinc-800/60 hover:bg-zinc-700 text-[10px] text-zinc-400 hover:text-zinc-200 transition-colors"
+            >
+              全选 PDF
+            </button>
+            <button
+              onClick={() => setSelected(new Set())}
+              className="px-2 py-0.5 rounded-md bg-zinc-800/60 hover:bg-zinc-700 text-[10px] text-zinc-400 hover:text-zinc-200 transition-colors"
+            >
+              清除
+            </button>
+          </div>
+        )}
 
         {/* Body */}
         <div className="flex flex-col flex-1 min-h-0 px-4 py-3">
@@ -220,11 +320,9 @@ export function DeviceBrowser({
                           <span className="text-sm text-zinc-300 truncate flex-1">
                             {e.name}
                           </span>
-                          {e.size > 0 && (
-                            <span className="text-[10px] font-mono text-zinc-600 shrink-0">
-                              {formatBytesExact(e.size)}
-                            </span>
-                          )}
+                          <span className="text-[10px] font-mono text-zinc-600 shrink-0">
+                            {formatBytesExact(e.size)}
+                          </span>
                         </label>
                       );
                     })

@@ -212,9 +212,21 @@ export interface AdbProgressEvent {
   percent: number;
 }
 
+/** Mirrors DeviceStatus in src-tauri/src/adb.rs. */
+export interface DeviceStatus {
+  connected: boolean;
+  /** "device" | "unauthorized" | "offline" | "none" */
+  state: string;
+  serial: string | null;
+}
+
 /** List a directory on the connected Android device (`adb shell ls -la`). */
 export const listDeviceDir = (path: string) =>
   invoke<DeviceEntry[]>("list_device_dir", { path });
+
+/** Read-only probe of the connected device's state. */
+export const deviceStatus = () =>
+  invoke<DeviceStatus>("device_status");
 
 /** Pull device files into the import workspace; returns the local copies. */
 export const pullDeviceFiles = (

@@ -7,7 +7,9 @@ mod jobs;
 mod probe;
 mod thumbs;
 
-use adb::{deliver_to_device, get_import_workspace, list_device_dir, pull_device_files};
+use adb::{
+    deliver_to_device, device_status, get_import_workspace, list_device_dir, pull_device_files,
+};
 use commands::compress_video::{compress_video, cancel_job, ActiveJobPids};
 use commands::compress_audio::compress_audio;
 use commands::compress_image::compress_image;
@@ -40,6 +42,7 @@ pub fn run() {
             compress_pdf,
             cancel_job,
             list_device_dir,
+            device_status,
             pull_device_files,
             deliver_to_device,
             get_import_workspace,
