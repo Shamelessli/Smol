@@ -174,3 +174,64 @@ export const replaceOriginal = (compressedPath: string, originalPath: string) =>
 /** Open Windows Explorer with the given file highlighted in its parent folder. */
 export const revealInExplorer = (path: string) =>
   invoke<void>("reveal_in_explorer", { path });
+
+// ── ADB device import / delivery ──────────────────────────────────────────────
+
+// Mirrors DeviceEntry in src-tauri/src/adb.rs
+export interface DeviceEntry {
+  name: string;
+  isDir: boolean;
+  size: number;
+}
+
+// Mirrors PullResult in src-tauri/src/adb.rs
+export interface PullResult {
+  key: string;
+  localPath: string;
+  name: string;
+  size: number;
+  remotePath: string;
+}
+
+// Mirrors DeliverResult in src-tauri/src/adb.rs
+export interface DeliverResult {
+  note?: string | null;
+}
+
+/** List a directory on the connected Android device (`adb shell ls -la`). */
+export const listDeviceDir = (path: string) =>
+  invoke<DeviceEntry[]>("list_device_dir", { path });
+
+/** Pull device files into the import workspace; returns the local copies. */
+export const pullDeviceFiles = (items: string[], workspace: string) =>
+  invoke<PullResult[]>("pull_device_files", { items, workspace });
+
+/** Create (if needed) and return Documents\Smol\imports. */
+export const getImportWorkspace = () =>
+  invoke<string>("get_import_workspace");
+
+/**
+ * Deliver a compressed file: replace it on the device (`replace`), push it to
+ * a device folder (`android-folder`), or copy it into a PC folder (`pc-folder`).
+ * `remoteDir` / `pcDir` are only required by their respective modes.
+ */
+export const deliverToDevice = (
+  localPath: string,
+  mode: string,
+  remotePath: string,
+  remoteDir: string | null,
+  pcDir: string | null,
+  newName: string,
+) =>
+  invoke<DeliverResult>("deliver_to_device", {
+    localPath,
+    mode,
+    remotePath,
+    remoteDir,
+    pcDir,
+    newName,
+  });
+
+/** Delete a local file (workspace import copy / staged output after delivery). */
+export const deleteLocalFile = (path: string) =>
+  invoke<void>("delete_local_file", { path });

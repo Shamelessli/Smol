@@ -38,6 +38,14 @@ export interface Job {
   outputPath?: string;
   /** True when the compressed file replaced the original (original moved to Recycle Bin). */
   replacedOriginal?: boolean;
+  /** Remote device path this job was imported from (ADB). Presence marks a device job. */
+  deviceRemotePath?: string;
+  /** Where the compressed result goes: replace on device, push to a device folder, or copy to a PC folder. */
+  deviceDeliveryMode?: DeviceDeliveryMode;
+  /** Target remote directory for `android-folder` delivery. */
+  deviceRemoteDir?: string;
+  /** Target local directory for `pc-folder` delivery. */
+  devicePcFolder?: string;
   kind: FileKind;
   addedAt: number;         // Date.now() when enqueued
 
@@ -63,6 +71,9 @@ export interface Job {
 }
 
 export type CompressionPreset = "less" | "recommended" | "extreme" | "lossless";
+
+/** Where a device-imported job's compressed result is delivered. */
+export type DeviceDeliveryMode = "pc-folder" | "android-folder" | "replace";
 
 export interface TargetFileSize {
   mode: "absolute" | "percent";

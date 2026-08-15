@@ -107,6 +107,16 @@ pub fn list_dir_supported(path: String) -> Result<Vec<PathInfo>, AppError> {
     Ok(results)
 }
 
+/// Delete a local file. Used to clean up workspace import copies and staged
+/// outputs after a successful device delivery, and to drop the local copy
+/// when the original was already optimal. Callers must be certain the file
+/// is no longer needed — this is a hard delete, not a Recycle Bin move.
+#[tauri::command]
+pub fn delete_local_file(path: String) -> Result<(), AppError> {
+    std::fs::remove_file(path)?;
+    Ok(())
+}
+
 #[tauri::command]
 pub fn write_clipboard_image(bytes: Vec<u8>) -> Result<PathInfo, AppError> {
     use std::io::Write;

@@ -1,14 +1,17 @@
-import { X, RotateCcw, Settings2 } from "lucide-react";
+import { X, RotateCcw, Settings2, FolderOpen, Smartphone } from "lucide-react";
 import { useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import type { CompressionPreset, JobOverrides } from "@/types";
+import { open } from "@tauri-apps/plugin-dialog";
+import type { CompressionPreset, DeviceDeliveryMode, JobOverrides } from "@/types";
 import { cn } from "@/lib/utils";
 import { formatBytesExact, middleTruncate, parentDirName, formatEta, probeLabel } from "@/lib/format";
 import { kindBadgeColor, kindLabel } from "@/lib/kinds";
 import { useJob, useJobsStore } from "@/store/jobs";
+import type { JobDevicePatch } from "@/store/jobs";
 import { usePreset } from "@/store/settings";
 import { estimateOutputBytes } from "@/lib/estimate";
 import { cancelJob } from "@/lib/tauri";
+import { DeviceBrowser } from "@/components/device/DeviceBrowser";
 import { DoneCard } from "./DoneCard";
 import { Thumbnail } from "./Thumbnail";
 
@@ -225,13 +228,71 @@ export function JobRow({ jobId }: { jobId: string }) {
 
 function JobRowSettings({ jobId }: { jobId: string }) {
   const job = useJob(jobId);
+  const [dirPickerOpen, setDirPickerOpen] = useState(false);
   if (!job) return null;
 
   const overrides = job.overrides || {};
   const update = (patch: Partial<JobOverrides>) => useJobsStore.getState().updateJobOverrides(jobId, patch);
+  const patchJob = (patch: JobDevicePatch) => useJobsStore.getState().patchJob(jobId, patch);
 
-  if (job.kind === "video") {
-    return (
+  async function handlePickPcFolder() {
+    const dir = await open({ directory: true, multiple: false });
+    if (typeof dir === "string") patchJob({ devicePcFolder: dir });
+  }
+
+  return (
+    <div className="flex flex-col gap-3 text-xs text-zinc-300">
+      {/* Device delivery — shown first for device-imported jobs */}
+      {job.deviceRemotePath && (
+        <>
+          <div className="flex items-center gap-2 flex-wrap">
+            <label className="flex items-center gap-2 cursor-pointer">
+              Deliver to:
+              <select
+                value={job.deviceDeliveryMode ?? "replace"}
+                onChange={(e) => patchJob({ deviceDeliveryMode: e.target.value as DeviceDeliveryMode })}
+                className="bg-zinc-950 border border-zinc-800 rounded-md px-2 py-1.5 focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition-all cursor-pointer hover:border-zinc-700"
+              >
+                <option value="replace">Replace on device</option>
+                <option value="android-folder">Push to device folder…</option>
+                <option value="pc-folder">Copy to PC folder…</option>
+              </select>
+            </label>
+            {job.deviceDeliveryMode === "android-folder" && (
+              <button
+                onClick={() => setDirPickerOpen(true)}
+                className="flex items-center gap-1.5 px-2 py-1 rounded-md bg-zinc-800 hover:bg-zinc-700 text-zinc-300 transition-colors max-w-56"
+                title={job.deviceRemoteDir ?? "Choose a folder on the device"}
+              >
+                <Smartphone className="h-3.5 w-3.5 shrink-0" />
+                <span className="truncate">{job.deviceRemoteDir ?? "Choose device folder…"}</span>
+              </button>
+            )}
+            {job.deviceDeliveryMode === "pc-folder" && (
+              <button
+                onClick={() => void handlePickPcFolder()}
+                className="flex items-center gap-1.5 px-2 py-1 rounded-md bg-zinc-800 hover:bg-zinc-700 text-zinc-300 transition-colors max-w-56"
+                title={job.devicePcFolder ?? "Choose a folder on this PC"}
+              >
+                <FolderOpen className="h-3.5 w-3.5 shrink-0" />
+                <span className="truncate">{job.devicePcFolder ?? "Choose PC folder…"}</span>
+              </button>
+            )}
+          </div>
+
+          <DeviceBrowser
+            open={dirPickerOpen}
+            onClose={() => setDirPickerOpen(false)}
+            pickDirectory
+            onSelect={(dirs) => {
+              setDirPickerOpen(false);
+              if (dirs[0]) patchJob({ deviceRemoteDir: dirs[0] });
+            }}
+          />
+        </>
+      )}
+
+      {job.kind === "video" && (
       <div className="flex items-center gap-4 text-xs text-zinc-300">
         <label className="flex items-center gap-2 cursor-pointer">
           Target Size:
@@ -261,11 +322,9 @@ function JobRowSettings({ jobId }: { jobId: string }) {
           </select>
         </label>
       </div>
-    );
-  }
+      )}
 
-  if (job.kind === "image") {
-    return (
+      {job.kind === "image" && (
       <div className="flex items-center gap-4 text-xs text-zinc-300">
         <label className="flex items-center gap-2 cursor-pointer group">
           <div className="relative flex items-center">
@@ -282,11 +341,10 @@ function JobRowSettings({ jobId }: { jobId: string }) {
           <span className="group-hover:text-zinc-100 transition-colors">Allow Resize</span>
         </label>
       </div>
-    );
-  }
+      )}
 
-  return (
-    <div className="flex items-center gap-4 text-xs text-zinc-300">
+      {job.kind !== "video" && job.kind !== "image" && (
+      <div className="flex items-center gap-4 text-xs text-zinc-300">
       <label className="flex items-center gap-2 cursor-pointer">
         Preset Override:
         <select 
@@ -300,6 +358,8 @@ function JobRowSettings({ jobId }: { jobId: string }) {
           <option value="extreme">Extreme Compression</option>
         </select>
       </label>
+      </div>
+      )}
     </div>
   );
 }

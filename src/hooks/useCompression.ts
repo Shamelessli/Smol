@@ -1,8 +1,18 @@
 import { Channel } from "@tauri-apps/api/core";
+import { toast } from "sonner";
 import { useJobsStore } from "@/store/jobs";
 import { useSettingsStore } from "@/store/settings";
-import { compressAudio, compressImage, compressPdf, compressVideo, replaceOriginal } from "@/lib/tauri";
-import type { VideoProgressEvent } from "@/lib/tauri";
+import {
+  compressAudio,
+  compressImage,
+  compressPdf,
+  compressVideo,
+  replaceOriginal,
+  deliverToDevice,
+  deleteLocalFile,
+} from "@/lib/tauri";
+import type { CompressResult, VideoProgressEvent } from "@/lib/tauri";
+import type { Job } from "@/types";
 import { buildOutputPath, buildReplaceIntermediatePath } from "@/lib/outputPath";
 
 /**
@@ -65,8 +75,15 @@ export async function startSqueeze(): Promise<void> {
       const job = useJobsStore.getState().jobs[jobId];
       if (!job) return;
 
-      const outputPath =
-        outputMode === "replace"
+      // Device jobs ALWAYS stage their output inside the import workspace
+      // subdir (where the pulled input lives) — delivery happens afterwards,
+      // regardless of the global outputMode. Branch first, before the local
+      // replace/same-folder/custom logic.
+      const isDeviceJob = !!job.deviceRemotePath;
+
+      const outputPath = isDeviceJob
+        ? stagingOutputPath(job, filenamePattern)
+        : outputMode === "replace"
           ? buildReplaceIntermediatePath(job.inputPath)
           : buildOutputPath(
               job.inputPath,
@@ -118,9 +135,11 @@ export async function startSqueeze(): Promise<void> {
           );
         }
 
-        // Replace mode: move original to Recycle Bin, put compressed in its place.
-        // outputLarger (compressed ≥ original) → original kept, nothing replaced.
-        if (outputMode === "replace" && !result.outputLarger) {
+        // Device job: deliver the staged result to the device / PC folder,
+        // then clean up the workspace copies.
+        if (isDeviceJob) {
+          await handleDeviceJob(jobId, job, result);
+        } else if (outputMode === "replace" && !result.outputLarger) {
           const finalPath = await replaceOriginal(result.outputPath, job.inputPath);
           useJobsStore.getState().setJobOutput(jobId, finalPath, result.outputBytes, true);
         } else {
@@ -138,4 +157,71 @@ export async function startSqueeze(): Promise<void> {
   }
 
   await Promise.all(executing);
+}
+
+/**
+ * Staging path for a device job's compressed output.
+ * The pulled input lives at `{workspace}\{uuid}\{name}` (its dir IS the
+ * workspace subdir), so the staged output sits next to it:
+ * `{workspace}\{uuid}\{patternDerivedName}`.
+ */
+function stagingOutputPath(job: Job, pattern: string): string {
+  const dir = job.inputPath.slice(
+    0,
+    Math.max(job.inputPath.lastIndexOf("\\"), job.inputPath.lastIndexOf("/")),
+  );
+  const dot = job.name.lastIndexOf(".");
+  const stem = dot >= 0 ? job.name.slice(0, dot) : job.name;
+  const ext = dot >= 0 ? job.name.slice(dot) : "";
+  const name = pattern.replace("{name}", stem).replace("{ext}", ext);
+  return `${dir}\\${name}`;
+}
+
+/**
+ * Deliver a device job's compressed result according to its delivery mode,
+ * then clean up the workspace copies:
+ * - `outputLarger` → the device keeps the original; just drop the local copy.
+ * - otherwise → `deliver_to_device` (replace / android-folder / pc-folder);
+ *   on success delete both the staged output and the pulled input; on failure
+ *   toast the real error (which may mention the recovered copy path).
+ */
+async function handleDeviceJob(
+  jobId: string,
+  job: Job,
+  result: CompressResult,
+): Promise<void> {
+  const { customOutputDir } = useSettingsStore.getState();
+  const staged = result.outputPath;
+
+  if (result.outputLarger) {
+    // Already optimal: the device keeps the original — drop the local copy.
+    useJobsStore.getState().setJobOutput(jobId, job.inputPath, result.outputBytes);
+    await deleteLocalFile(job.inputPath).catch(() => {});
+    return;
+  }
+
+  const mode = job.deviceDeliveryMode ?? "replace";
+  const newName =
+    staged.slice(Math.max(staged.lastIndexOf("\\"), staged.lastIndexOf("/")) + 1);
+  const pcDir = job.devicePcFolder ?? customOutputDir ?? null;
+
+  try {
+    const deliver = await deliverToDevice(
+      staged,
+      mode,
+      job.deviceRemotePath!,
+      job.deviceRemoteDir ?? null,
+      pcDir,
+      newName,
+    );
+    if (deliver.note) toast.info(deliver.note);
+    useJobsStore.getState().setJobOutput(jobId, staged, result.outputBytes);
+    await deleteLocalFile(staged).catch(() => {});
+    await deleteLocalFile(job.inputPath).catch(() => {});
+  } catch (err) {
+    // The Rust command may have preserved the compressed file and reported
+    // where — surface that real message instead of a generic one.
+    toast.error(extractErrorMessage(err) || "已压缩，但交付失败", { duration: 6000 });
+    useJobsStore.getState().setJobOutput(jobId, staged, result.outputBytes);
+  }
 }

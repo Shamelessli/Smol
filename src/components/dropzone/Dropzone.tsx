@@ -1,13 +1,15 @@
+import { useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { v4 as uuidv4 } from "uuid";
-import { Upload, Trash2 } from "lucide-react";
+import { Upload, Trash2, Smartphone } from "lucide-react";
 import { toast } from "sonner";
 import { motion, AnimatePresence } from "framer-motion";
 import { cn } from "@/lib/utils";
 import { fileKindFromPath } from "@/lib/kinds";
-import { getPathInfo } from "@/lib/tauri";
+import { getPathInfo, getImportWorkspace, pullDeviceFiles } from "@/lib/tauri";
 import { useJobsStore } from "@/store/jobs";
 import type { NewJobInput } from "@/store/jobs";
+import { DeviceBrowser } from "@/components/device/DeviceBrowser";
 import { EmptyState } from "./EmptyState";
 
 const VIDEO_EXTS = ["mp4", "mov", "mkv", "webm", "avi", "m4v", "wmv", "flv"];
@@ -22,6 +24,7 @@ interface DropzoneProps {
 }
 
 export function Dropzone({ isDraggingOver, hasFiles }: DropzoneProps) {
+  const [browserOpen, setBrowserOpen] = useState(false);
 
   async function handleOpenDialog() {
     const selected = await open({
@@ -52,6 +55,46 @@ export function Dropzone({ isDraggingOver, hasFiles }: DropzoneProps) {
     }
   }
 
+  /** Pull the selected remote files into the import workspace and enqueue them. */
+  async function handleDeviceSelect(paths: string[]) {
+    if (paths.length === 0) return;
+    try {
+      const workspace = await getImportWorkspace();
+      const results = await pullDeviceFiles(paths, workspace);
+
+      const toAdd: NewJobInput[] = [];
+      for (const r of results) {
+        const kind = fileKindFromPath(r.name);
+        if (kind === "unsupported") continue;
+        toAdd.push({
+          id: uuidv4(),
+          inputPath: r.localPath,
+          name: r.name,
+          kind,
+          inputBytes: r.size,
+          deviceRemotePath: r.remotePath,
+          deviceDeliveryMode: "replace",
+        });
+      }
+
+      if (toAdd.length > 0) {
+        useJobsStore.getState().addFiles(toAdd);
+        toast.success(`Imported ${toAdd.length} file${toAdd.length > 1 ? "s" : ""} from device`);
+      } else {
+        toast("No supported files selected on device");
+      }
+    } catch (err) {
+      const message =
+        err instanceof Error
+          ? err.message
+          : err !== null && typeof err === "object" && "message" in err &&
+            typeof (err as Record<string, unknown>).message === "string"
+            ? (err as Record<string, unknown>).message as string
+            : "无法从设备导入文件，请重试";
+      toast.error(message, { duration: 6000 });
+    }
+  }
+
   function handleClearAll() {
     const currentState = useJobsStore.getState();
     const prevJobs = { ...currentState.jobs };
@@ -74,6 +117,7 @@ export function Dropzone({ isDraggingOver, hasFiles }: DropzoneProps) {
   // Outer motion.div: flex-1 when empty (fills container), h-12 when compact.
   // The `layout` prop makes Framer Motion animate the height change (~200 ms easeOut).
   return (
+    <>
     <motion.div
       layout
       transition={{ duration: 0.2, ease: "easeOut" }}
@@ -123,6 +167,13 @@ export function Dropzone({ isDraggingOver, hasFiles }: DropzoneProps) {
                   <Upload className="h-4 w-4" />
                   Open files…
                 </button>
+                <button
+                  onClick={() => setBrowserOpen(true)}
+                  className="flex items-center gap-2 px-4 py-2 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-sm transition-colors"
+                >
+                  <Smartphone className="h-4 w-4" />
+                  Add from device
+                </button>
               </div>
             </motion.div>
           </motion.div>
@@ -163,10 +214,29 @@ export function Dropzone({ isDraggingOver, hasFiles }: DropzoneProps) {
                 <Upload className="h-3.5 w-3.5" />
                 Add more…
               </button>
+              <button
+                onClick={() => setBrowserOpen(true)}
+                className="flex items-center gap-1.5 px-3 py-1 rounded-md bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-xs transition-colors"
+                title="Add files from an Android device"
+              >
+                <Smartphone className="h-3.5 w-3.5" />
+                Add from device
+              </button>
             </div>
           </motion.div>
         )}
       </AnimatePresence>
     </motion.div>
+
+    {/* Device file browser modal */}
+    <DeviceBrowser
+      open={browserOpen}
+      onClose={() => setBrowserOpen(false)}
+      onSelect={(paths) => {
+        setBrowserOpen(false);
+        void handleDeviceSelect(paths);
+      }}
+    />
+    </>
   );
 }

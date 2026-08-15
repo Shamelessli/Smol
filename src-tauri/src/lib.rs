@@ -7,7 +7,7 @@ mod jobs;
 mod probe;
 mod thumbs;
 
-use adb::{deliver_to_device, list_device_dir, pull_device_files};
+use adb::{deliver_to_device, get_import_workspace, list_device_dir, pull_device_files};
 use commands::compress_video::{compress_video, cancel_job, ActiveJobPids};
 use commands::compress_audio::compress_audio;
 use commands::compress_image::compress_image;
@@ -30,6 +30,7 @@ pub fn run() {
             fs_bridge::replace_original,
             fs_bridge::list_dir_supported,
             fs_bridge::reveal_in_explorer,
+            fs_bridge::delete_local_file,
             fs_bridge::write_clipboard_image,
             probe::probe_media,
             thumbs::generate_thumbnail,
@@ -41,6 +42,7 @@ pub fn run() {
             list_device_dir,
             pull_device_files,
             deliver_to_device,
+            get_import_workspace,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

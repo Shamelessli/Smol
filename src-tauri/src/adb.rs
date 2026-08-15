@@ -145,6 +145,21 @@ pub struct DeliverResult {
     pub note: Option<String>,
 }
 
+/// Return (creating it if needed) the local import workspace:
+/// `Documents\Smol\imports`. Every `adb pull` stores each file in its own
+/// `{uuid}` subdirectory here so staged outputs never collide.
+#[tauri::command]
+pub fn get_import_workspace() -> Result<String, AppError> {
+    let docs = std::env::var("USERPROFILE")
+        .map_err(|_| AppError::Other("USERPROFILE not set".into()))?;
+    let dir = Path::new(&docs)
+        .join("Documents")
+        .join("Smol")
+        .join("imports");
+    std::fs::create_dir_all(&dir)?;
+    Ok(dir.to_string_lossy().into_owned())
+}
+
 fn recovered_dir() -> Result<PathBuf, AppError> {
     let docs = std::env::var("USERPROFILE")
         .map_err(|_| AppError::Other("USERPROFILE not set".into()))?;

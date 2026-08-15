@@ -6,8 +6,24 @@ import { estimateOutputBytes } from "@/lib/estimate";
 
 // ── Public type for the addFiles payload ──────────────────────────────────────
 // Contains only what the caller knows at drop time; the rest is initialised by
-// the store.
-export type NewJobInput = Pick<Job, "id" | "inputPath" | "name" | "kind" | "inputBytes">;
+// the store. Device jobs additionally carry the remote origin + delivery mode.
+export type NewJobInput = Pick<
+  Job,
+  | "id"
+  | "inputPath"
+  | "name"
+  | "kind"
+  | "inputBytes"
+  | "deviceRemotePath"
+  | "deviceDeliveryMode"
+  | "deviceRemoteDir"
+  | "devicePcFolder"
+>;
+
+/** Per-job device delivery fields settable via patchJob. */
+export type JobDevicePatch = Partial<
+  Pick<Job, "deviceDeliveryMode" | "deviceRemoteDir" | "devicePcFolder">
+>;
 
 // ── Store state & actions ────────────────────────────────────────────────────
 
@@ -43,6 +59,8 @@ interface JobsState {
   setJobOutput: (id: string, outputPath: string, outputBytes?: number, replacedOriginal?: boolean) => void;
   /** Update per-job overrides */
   updateJobOverrides: (id: string, overrides: Partial<JobOverrides>) => void;
+  /** Patch per-job device delivery fields (mode / target dirs). */
+  patchJob: (id: string, patch: JobDevicePatch) => void;
 }
 
 // ── Store ────────────────────────────────────────────────────────────────────
@@ -175,6 +193,13 @@ export const useJobsStore = create<JobsState>((set, get) => ({
               },
             },
           }
+        : s
+    ),
+
+  patchJob: (id, patch) =>
+    set((s) =>
+      s.jobs[id]
+        ? { jobs: { ...s.jobs, [id]: { ...s.jobs[id], ...patch } } }
         : s
     ),
 }));
