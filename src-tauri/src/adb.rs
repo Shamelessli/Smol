@@ -16,30 +16,28 @@ pub struct DeviceEntry {
     pub size: u64,
 }
 
-/// Parse one `ls -la` line. Never fails the caller — returns None on odd lines.
+/// Parse one `ls -aF` line into an entry. `ls -F` appends `/` to directories
+/// and `*` to executables, and prints one entry per line — so names with
+/// spaces survive intact (no whitespace-column guessing). Returns None for
+/// `.`/`..`/empty/odd lines. Size is not available in this mode (0).
 pub fn parse_ls_line(line: &str) -> Option<DeviceEntry> {
     let line = line.trim_end_matches(['\r', '\n']);
-    if line.is_empty() || line.starts_with("total") {
+    if line.is_empty() {
         return None;
     }
-    let mut cols = line.split_whitespace();
-    let perms = cols.next()?;
-    let _links = cols.next()?;
-    let _owner = cols.next()?;
-    let _group = cols.next()?;
-    let size: u64 = cols.next()?.parse().ok()?;
-    let _date1 = cols.next()?;
-    let _date2 = cols.next()?;
-    let mut name_parts: Vec<&str> = cols.collect();
-    // name may be last column only, but guard against extra columns
-    let name = name_parts.pop()?.to_string();
-    if name == "." || name == ".." {
+    let (name, is_dir) = if let Some(n) = line.strip_suffix('/') {
+        (n, true)
+    } else {
+        let n = line.strip_suffix('*').unwrap_or(line);
+        (n, false)
+    };
+    if name == "." || name == ".." || name.is_empty() {
         return None;
     }
     Some(DeviceEntry {
-        name,
-        is_dir: perms.starts_with('d'),
-        size,
+        name: name.to_string(),
+        is_dir,
+        size: 0,
     })
 }
 
@@ -107,7 +105,7 @@ pub async fn list_device_dir(path: String) -> Result<Vec<DeviceEntry>, AppError>
     let entries = tauri::async_runtime::spawn_blocking(move || -> Result<Vec<DeviceEntry>, AppError> {
         let mut cmd = adb_cmd()?;
         let escaped = path.replace('\'', "'\\''");
-        cmd.args(["shell", &format!("ls -la '{escaped}'")]);
+        cmd.args(["shell", &format!("ls -aF '{escaped}'")]);
         let out = cmd
             .output()
             .map_err(|e| AppError::Other(format!("adb shell failed: {e}")))?;
@@ -293,30 +291,50 @@ mod tests {
 
     #[test]
     fn parses_regular_file() {
-        let e = parse_ls_line("-rw-rw---- 1 root sdcard_rw 24576 2024-01-01 10:00 IMG_1.jpg").unwrap();
+        let e = parse_ls_line("IMG_1.jpg").unwrap();
         assert_eq!(e.name, "IMG_1.jpg");
         assert!(!e.is_dir);
-        assert_eq!(e.size, 24576);
     }
 
     #[test]
-    fn parses_directory() {
-        let e = parse_ls_line("drwxrwx--x 2 root sdcard_rw  4096 2024-01-01 10:00 DCIM").unwrap();
+    fn parses_directory_with_slash_indicator() {
+        let e = parse_ls_line("DCIM/").unwrap();
         assert!(e.is_dir);
         assert_eq!(e.name, "DCIM");
     }
 
     #[test]
+    fn preserves_names_with_spaces() {
+        let e = parse_ls_line("My Files/").unwrap();
+        assert!(e.is_dir);
+        assert_eq!(e.name, "My Files");
+        let f = parse_ls_line("happy vacation.mp4").unwrap();
+        assert!(!f.is_dir);
+        assert_eq!(f.name, "happy vacation.mp4");
+    }
+
+    #[test]
+    fn parses_executable_indicator() {
+        let e = parse_ls_line("script.sh*").unwrap();
+        assert!(!e.is_dir);
+        assert_eq!(e.name, "script.sh");
+    }
+
+    #[test]
     fn skips_dot_entries() {
-        let out = parse_ls_output("drwxrwx--x 1 root sdcard_rw 4096 2024-01-01 10:00 .\ndrwxrwx--x 1 root sdcard_rw 4096 2024-01-01 10:00 ..\n-rw-rw---- 1 root sdcard_rw 123 2024-01-01 10:00 a.txt");
-        assert_eq!(out.len(), 1);
-        assert_eq!(out[0].name, "a.txt");
+        let out = parse_ls_output("./\n../\nDCIM/\na.txt");
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0].name, "DCIM");
+        assert_eq!(out[1].name, "a.txt");
     }
 
     #[test]
     fn tolerates_odd_lines() {
         assert!(parse_ls_line("").is_none());
-        assert!(parse_ls_line("total 128").is_none());
-        assert!(parse_ls_output("garbage\n").is_empty());
+        assert!(parse_ls_line("/").is_none()); // strip_suffix('/') → empty name
+        // a non-indicator line is a plain file whose name may contain spaces
+        let e = parse_ls_line("garbage that has no indicator").unwrap();
+        assert_eq!(e.name, "garbage that has no indicator");
+        assert!(!e.is_dir);
     }
 }

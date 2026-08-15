@@ -220,9 +220,11 @@ export function DeviceBrowser({
                           <span className="text-sm text-zinc-300 truncate flex-1">
                             {e.name}
                           </span>
-                          <span className="text-[10px] font-mono text-zinc-600 shrink-0">
-                            {formatBytesExact(e.size)}
-                          </span>
+                          {e.size > 0 && (
+                            <span className="text-[10px] font-mono text-zinc-600 shrink-0">
+                              {formatBytesExact(e.size)}
+                            </span>
+                          )}
                         </label>
                       );
                     })
