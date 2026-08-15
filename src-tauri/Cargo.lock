@@ -4349,7 +4349,6 @@ checksum = "67b1b7a3b5fe4f1376887184045fcf45c69e92af734b7aaddc05fb777b6fbd03"
 name = "smol"
 version = "1.0.0"
 dependencies = [
- "base64 0.22.1",
  "ffmpeg-sidecar",
  "image",
  "lofty",
@@ -4370,7 +4369,6 @@ dependencies = [
  "trash",
  "uuid",
  "webp",
- "windows 0.61.3",
 ]
 
 [[package]]

@@ -1,6 +1,5 @@
 mod commands;
 mod encoders;
-mod import;
 mod error;
 mod fs_bridge;
 mod jobs;
@@ -12,7 +11,6 @@ use commands::compress_audio::compress_audio;
 use commands::compress_image::compress_image;
 use commands::compress_pdf::compress_pdf;
 use encoders::hw_detect::{probe_hw_encoders, HwEncodersState};
-use import::{deliver_output, delete_local_file, ensure_import_workspace, pick_import};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -38,10 +36,6 @@ pub fn run() {
             compress_image,
             compress_pdf,
             cancel_job,
-            ensure_import_workspace,
-            pick_import,
-            deliver_output,
-            delete_local_file,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

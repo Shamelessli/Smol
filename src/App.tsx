@@ -13,7 +13,6 @@ import { useMaximized } from "@/hooks/useMaximized";
 import { useDragDrop } from "@/hooks/useDragDrop";
 import { useShortcuts } from "@/hooks/useShortcuts";
 import { useJobsStore } from "@/store/jobs";
-import { ensureImportWorkspace } from "@/lib/tauri";
 
 export default function App() {
   const maximized  = useMaximized();
@@ -43,12 +42,6 @@ export default function App() {
     };
     window.addEventListener("smol-auto-squeeze", handleAutoSqueeze);
     return () => window.removeEventListener("smol-auto-squeeze", handleAutoSqueeze);
-  }, []);
-
-  // One-time startup: create the import workspace and GC stale subdirs
-  // (Rust side removes subdirs older than 60 min).
-  useEffect(() => {
-    ensureImportWorkspace().catch(() => {});
   }, []);
 
   return (

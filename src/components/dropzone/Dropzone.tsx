@@ -1,13 +1,20 @@
+import { open } from "@tauri-apps/plugin-dialog";
 import { v4 as uuidv4 } from "uuid";
 import { Upload, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { motion, AnimatePresence } from "framer-motion";
 import { cn } from "@/lib/utils";
 import { fileKindFromPath } from "@/lib/kinds";
-import { getPathInfo, pickImport } from "@/lib/tauri";
+import { getPathInfo } from "@/lib/tauri";
 import { useJobsStore } from "@/store/jobs";
 import type { NewJobInput } from "@/store/jobs";
 import { EmptyState } from "./EmptyState";
+
+const VIDEO_EXTS = ["mp4", "mov", "mkv", "webm", "avi", "m4v", "wmv", "flv"];
+const AUDIO_EXTS = ["mp3", "m4a", "aac", "wav", "flac", "ogg", "opus", "wma"];
+const IMAGE_EXTS = ["jpg", "jpeg", "png", "webp", "heic", "heif", "avif", "bmp", "tiff"];
+const PDF_EXTS   = ["pdf"];
+const ALL_EXTS   = [...VIDEO_EXTS, ...AUDIO_EXTS, ...IMAGE_EXTS, ...PDF_EXTS];
 
 interface DropzoneProps {
   isDraggingOver: boolean;
@@ -17,41 +24,29 @@ interface DropzoneProps {
 export function Dropzone({ isDraggingOver, hasFiles }: DropzoneProps) {
 
   async function handleOpenDialog() {
-    const results = await pickImport().catch((e: unknown) => {
-      const message =
-        e instanceof Error ? e.message :
-        e !== null && typeof e === "object" && "message" in e && typeof (e as Record<string, unknown>).message === "string"
-          ? (e as Record<string, unknown>).message as string
-          : "无法导入所选文件，请重试";
-      toast.error(message, { duration: 6000 });
-      return null;
+    const selected = await open({
+      multiple: true,
+      filters: [
+        { name: "All supported", extensions: ALL_EXTS },
+        { name: "Video",         extensions: VIDEO_EXTS },
+        { name: "Audio",         extensions: AUDIO_EXTS },
+        { name: "Images",        extensions: IMAGE_EXTS },
+        { name: "PDF",           extensions: PDF_EXTS   },
+      ],
     });
-    if (!results) return;
+
+    if (!selected) return;
+    const paths = Array.isArray(selected) ? selected : [selected];
 
     const toAdd: NewJobInput[] = [];
 
-    for (const r of results) {
-      if (r.isLocal) {
-        const kind = fileKindFromPath(r.path ?? "");
-        if (kind === "unsupported" || !r.path) continue;
-        const info = await getPathInfo(r.path);
-        if (!info.exists) continue;
-        toAdd.push({ id: uuidv4(), inputPath: r.path, name: info.name, kind, inputBytes: info.size });
-      } else {
-        const kind = fileKindFromPath(r.name ?? "");
-        if (kind === "unsupported" || !r.localPath || !r.parentIdListB64) continue;
-        toAdd.push({
-          id: uuidv4(),
-          inputPath: r.localPath,
-          name: r.name!,
-          kind,
-          inputBytes: r.size ?? 0,
-          imported: true,
-          importParentIdListB64: r.parentIdListB64,
-        });
-      }
+    for (const path of paths) {
+      const info = await getPathInfo(path);
+      if (!info.exists) continue;
+      const kind = fileKindFromPath(info.name);
+      if (kind === "unsupported") continue;
+      toAdd.push({ id: uuidv4(), inputPath: info.path, name: info.name, kind, inputBytes: info.size });
     }
-
     if (toAdd.length > 0) {
       useJobsStore.getState().addFiles(toAdd);
     }
