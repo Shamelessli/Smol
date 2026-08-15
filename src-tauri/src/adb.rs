@@ -45,6 +45,67 @@ pub fn parse_ls_output(output: &str) -> Vec<DeviceEntry> {
     output.lines().filter_map(parse_ls_line).collect()
 }
 
+/// Parse `adb devices` output into (serial, state) pairs. Skips the header
+/// line and ignores blank/garbage rows.
+pub fn parse_devices_output(output: &str) -> Vec<(String, String)> {
+    output
+        .lines()
+        .skip(1) // "List of devices attached"
+        .filter_map(|line| {
+            let mut it = line.split_whitespace();
+            match (it.next(), it.next()) {
+                (Some(serial), Some(state)) => {
+                    Some((serial.to_string(), state.to_string()))
+                }
+                _ => None,
+            }
+        })
+        .collect()
+}
+
+/// Run `adb devices` and return (serial, state) pairs.
+fn adb_device_states() -> Result<Vec<(String, String)>, AppError> {
+    let mut cmd = adb_cmd()?;
+    cmd.args(["devices"]);
+    let out = cmd
+        .output()
+        .map_err(|e| AppError::Other(format!("adb devices failed: {e}")))?;
+    if !out.status.success() {
+        return Err(AppError::Other("adb devices 失败".into()));
+    }
+    Ok(parse_devices_output(&String::from_utf8_lossy(&out.stdout)))
+}
+
+/// Ensure at least one device is ready (`device` state) before a command that
+/// needs it. Recovers a stale adb server (kill-server, then the next adb call
+/// auto-starts a fresh one) once before giving up. Returns a targeted error for
+/// the `unauthorized` state so the UI can tell the user to accept the phone's
+/// USB-debugging prompt.
+fn ensure_device_ready() -> Result<(), AppError> {
+    let any_device = || -> Result<bool, AppError> {
+        Ok(adb_device_states()?.iter().any(|(_, s)| s == "device"))
+    };
+    if any_device()? {
+        return Ok(());
+    }
+    if adb_device_states()?.iter().any(|(_, s)| s == "unauthorized") {
+        return Err(AppError::Other(
+            "设备未授权 — 请在手机上允许 USB 调试授权".into(),
+        ));
+    }
+    // Stale server recovery: kill the server so the next invocation starts a
+    // fresh one that re-enumerates the device.
+    if let Ok(mut c) = adb_cmd() {
+        let _ = c.args(["kill-server"]).status();
+    }
+    if any_device()? {
+        return Ok(());
+    }
+    Err(AppError::Other(
+        "未检测到设备 — 请确认设备已连接并启用 USB 调试，并在手机上允许授权".into(),
+    ))
+}
+
 fn adb_cmd() -> Result<std::process::Command, AppError> {
     let adb = adb_path()?;
     let mut cmd = std::process::Command::new(&adb);
@@ -103,6 +164,7 @@ fn adb_error(stderr: &[u8], context: &str) -> AppError {
 #[tauri::command]
 pub async fn list_device_dir(path: String) -> Result<Vec<DeviceEntry>, AppError> {
     let entries = tauri::async_runtime::spawn_blocking(move || -> Result<Vec<DeviceEntry>, AppError> {
+        ensure_device_ready()?;
         let mut cmd = adb_cmd()?;
         let escaped = path.replace('\'', "'\\''");
         cmd.args(["shell", &format!("ls -aF '{escaped}'")]);
@@ -135,6 +197,7 @@ pub async fn pull_device_files(
     workspace: String,
 ) -> Result<Vec<PullResult>, AppError> {
     let pulled = tauri::async_runtime::spawn_blocking(move || -> Result<Vec<PullResult>, AppError> {
+        ensure_device_ready()?;
         let mut out = Vec::new();
         let mut last_err: Option<Vec<u8>> = None;
         for remote in items {
@@ -218,6 +281,7 @@ pub async fn deliver_to_device(
 ) -> Result<DeliverResult, AppError> {
     tauri::async_runtime::spawn_blocking(move || {
         let run = || -> Result<DeliverResult, AppError> {
+            ensure_device_ready()?;
             match mode.as_str() {
                 "pc-folder" => {
                     let dir = pc_dir.ok_or_else(|| AppError::Other("未选择 PC 输出目录".into()))?;
@@ -336,5 +400,20 @@ mod tests {
         let e = parse_ls_line("garbage that has no indicator").unwrap();
         assert_eq!(e.name, "garbage that has no indicator");
         assert!(!e.is_dir);
+    }
+
+    #[test]
+    fn parses_device_states() {
+        let out = parse_devices_output(
+            "List of devices attached\nR58M123ABC\tdevice\n1234abcd\toffline\n",
+        );
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0], ("R58M123ABC".to_string(), "device".to_string()));
+        assert_eq!(out[1], ("1234abcd".to_string(), "offline".to_string()));
+    }
+
+    #[test]
+    fn parses_no_devices_as_empty() {
+        assert!(parse_devices_output("List of devices attached\n\n").is_empty());
     }
 }
