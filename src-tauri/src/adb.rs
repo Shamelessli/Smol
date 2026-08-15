@@ -82,7 +82,8 @@ pub fn adb_path() -> Result<PathBuf, AppError> {
 #[tauri::command]
 pub async fn list_device_dir(path: String) -> Result<Vec<DeviceEntry>, AppError> {
     let mut cmd = adb_cmd()?;
-    cmd.args(["shell", &format!("ls -la {path}")]);
+    let escaped = path.replace('\'', "'\\''");
+    cmd.args(["shell", &format!("ls -la '{escaped}'")]);
     let out = cmd
         .output()
         .map_err(|e| AppError::Other(format!("adb shell failed: {e}")))?;
@@ -187,8 +188,7 @@ pub async fn deliver_to_device(
                 }
                 Ok(DeliverResult { note: None })
             }
-            _ => {
-                // replace
+            "replace" => {
                 let mut cmd = adb_cmd()?;
                 cmd.args(["push"]).arg(&local_path).arg(&remote_path);
                 let st = cmd
@@ -201,19 +201,23 @@ pub async fn deliver_to_device(
                 }
                 Ok(DeliverResult { note: None })
             }
+            _ => return Err(AppError::Other(format!("未知交付模式: {mode}"))),
         }
     };
     match run() {
         Ok(r) => Ok(r),
         Err(e) => {
-            // durable recovery copy so the user never loses the result
-            let recovered = recovered_dir()?.join(&new_name);
-            let copied = std::fs::copy(&local_path, &recovered).is_ok();
             let base = e.to_string();
-            let msg = if copied {
-                format!("{base}；压缩结果已复制到 {}", recovered.display())
-            } else {
-                base
+            let msg = match recovered_dir() {
+                Ok(dir) => {
+                    let recovered = dir.join(&new_name);
+                    if std::fs::copy(&local_path, &recovered).is_ok() {
+                        format!("{base}；压缩结果已复制到 {}", recovered.display())
+                    } else {
+                        base
+                    }
+                }
+                Err(_) => base,
             };
             Err(AppError::Other(msg))
         }
