@@ -54,6 +54,10 @@ export interface Job {
   progress: number;        // 0–100 during encoding; 0 at all other stages
   speed?: string;          // e.g. "2.4x"   — populated during encoding
   etaSec?: number;         // seconds remaining — populated during encoding
+  /** True while a device job's compressed result is being pushed back to the
+   *  phone (adb push) — separates the push phase from the compression phase in
+   *  the progress bar (compression → green "推送中…" bar after 100% encoded). */
+  pushing?: boolean;
 
   // ── Sizes ────────────────────────────────────────────────────────────────
   inputBytes: number;

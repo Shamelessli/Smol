@@ -383,6 +383,23 @@ fn pull_failure_message(remote: &str, stderr: &[u8]) -> String {
     )
 }
 
+/// Compose the local pull target paths for one remote file.
+///
+/// Returns `(pull_temp, final)`:
+/// * `pull_temp` is `{workspace}\{uuid}\{uuid}` — the leaf is the uuid alone,
+///   guaranteed space-less, so `adb pull`'s local argv never carries spaces in
+///   the leaf (the root cause of two-space pull failures).
+/// * `final` is `{workspace}\{uuid}\{basename}` — the user-visible name, which
+///   may contain any number of spaces; reached via a local `std::fs::rename`
+///   that Windows handles robustly regardless of whitespace.
+fn compose_pull_paths(workspace: &str, uuid: &str, remote: &str) -> (PathBuf, PathBuf) {
+    let dest = Path::new(workspace).join(uuid);
+    let basename = remote.rsplit('/').next().unwrap_or("file");
+    let pull_temp = dest.join(uuid);
+    let final_path = dest.join(basename);
+    (pull_temp, final_path)
+}
+
 #[tauri::command]
 pub async fn pull_device_files(
     items: Vec<String>,
@@ -396,18 +413,20 @@ pub async fn pull_device_files(
         for remote in items {
             let uuid = uuid::Uuid::new_v4().simple().to_string();
             let dest = format!("{workspace}\\{uuid}");
-            // adb pull requires the local parent directory to exist; it does NOT
-            // auto-create it. On paths containing spaces (e.g. a Windows user
-            // dir like "C:\Users\John Doe\…") adb additionally fails to create
-            // the leaf directory even on versions that normally would, surfacing
-            // as "No such file or directory" → "没有该文件". Pre-create `dest`
-            // so adb only has to write the file, mirroring `deliver_to_device`'s
-            // pc-folder branch which create_dir_all() before writing.
             std::fs::create_dir_all(&dest)?;
-            let name = remote.rsplit('/').next().unwrap_or("file").to_string();
-            let local = Path::new(&dest).join(&name);
+            let (pull_local, local) = compose_pull_paths(&workspace, &uuid, &remote);
+            let name = local
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("file")
+                .to_string();
             let mut cmd = adb_cmd()?;
-            cmd.args(["pull", &remote]).arg(&local);
+            // Pull to a space-less leaf name (the {uuid}); `adb pull`'s local
+            // argv is sensitive to spaces in the leaf on some setups (two-space
+            // filenames reliably abort with "No such file or directory"). The
+            // local filesystem rename afterwards tolerates any number of spaces
+            // — so adb never sees a spaced filename.
+            cmd.args(["pull", &remote]).arg(&pull_local);
             let (status, err_text) =
                 spawn_adb_progress(&mut cmd, "pull".into(), remote.clone(), &on_progress)?;
             if !status.success() {
@@ -427,10 +446,18 @@ pub async fn pull_device_files(
                 });
                 continue;
             }
-            let size = std::fs::metadata(&local).map(|m| m.len()).unwrap_or(0);
+            // Rename the space-less pull name into the user-visible basename.
+            // Fallback to the {uuid} name if the remote basename contains a
+            // Windows-illegal character (e.g. ':' from an Android timestamp
+            // folder) — the file is never lost, just under the temp name.
+            let final_local = match std::fs::rename(&pull_local, &local) {
+                Ok(()) => local,
+                Err(_) => pull_local.clone(),
+            };
+            let size = std::fs::metadata(&final_local).map(|m| m.len()).unwrap_or(0);
             out.push(PullResult {
                 key: uuid,
-                local_path: local.to_string_lossy().into_owned(),
+                local_path: final_local.to_string_lossy().into_owned(),
                 name,
                 size,
                 remote_path: remote,
@@ -654,5 +681,21 @@ mod tests {
         assert_eq!(next_percent("no brackets here", 0), None);
         assert_eq!(next_percent("[99] no percent sign", 0), None);
         assert_eq!(next_percent("[] empty", 0), None);
+    }
+
+    #[test]
+    fn compose_pull_paths_temp_leaf_is_uuid_no_spaces() {
+        let (tmp, fin) = compose_pull_paths(
+            r"C:\Users\John Doe\Documents\Smol\imports",
+            "abc123",
+            "/sdcard/My  Folder/My  Video.mp4",
+        );
+        // temp leaf is exactly the uuid — no extension, no spaces.
+        assert_eq!(tmp.file_name().unwrap().to_str(), Some("abc123"));
+        // final leaf is the remote basename (preserving any spaces).
+        assert_eq!(fin.file_name().unwrap().to_str(), Some("My  Video.mp4"));
+        // both live under the per-file {uuid} subdir of the workspace.
+        assert!(tmp.starts_with(r"C:\Users\John Doe\Documents\Smol\imports\abc123"));
+        assert!(fin.starts_with(r"C:\Users\John Doe\Documents\Smol\imports\abc123"));
     }
 }

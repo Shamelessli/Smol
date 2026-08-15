@@ -49,6 +49,9 @@ interface JobsState {
   updateJobThumbnail: (id: string, thumbnailPath: string | null) => void;
   /** Mark a job as failed and record the error message. */
   setJobError: (id: string, message: string) => void;
+  /** Toggle the adb-push phase flag on a device job so the row's progress bar
+   *  switches from compression to "推送中…" presentation. */
+  setJobPushing: (id: string, pushing: boolean) => void;
   // ── Phase 6: compression progress ────────────────────────────────────────
   /** Update live encoding progress — called from the Channel onmessage handler. */
   updateJobProgress: (
@@ -141,6 +144,13 @@ export const useJobsStore = create<JobsState>((set, get) => ({
     set((s) =>
       s.jobs[id]
         ? { jobs: { ...s.jobs, [id]: { ...s.jobs[id], status: "failed", errorMessage: message } } }
+        : s
+    ),
+
+  setJobPushing: (id, pushing) =>
+    set((s) =>
+      s.jobs[id]
+        ? { jobs: { ...s.jobs, [id]: { ...s.jobs[id], pushing } } }
         : s
     ),
 

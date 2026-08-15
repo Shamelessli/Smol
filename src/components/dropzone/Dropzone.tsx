@@ -264,19 +264,21 @@ export function Dropzone({ isDraggingOver, hasFiles }: DropzoneProps) {
       }}
     />
 
-    {/* Pull progress bar */}
+    {/* Pull progress bar — emerald to visually echo the device-push phase so the
+        user reads "device transfer" consistently, distinct from compression's
+        indigo/purple. */}
     {pulling && (
-      <div className="fixed bottom-4 left-1/2 -translate-x-1/2 z-50 w-[420px] max-w-[90vw] px-4 py-3 rounded-lg bg-zinc-900/95 border border-zinc-700 shadow-2xl">
+      <div className="fixed bottom-4 left-1/2 -translate-x-1/2 z-50 w-[420px] max-w-[90vw] px-4 py-3 rounded-lg bg-zinc-900/95 border border-emerald-700/40 shadow-2xl">
         <div className="flex items-center justify-between text-xs text-zinc-300 mb-1.5">
           <span className="flex items-center gap-1.5 truncate">
-            <Loader2 className="h-3.5 w-3.5 animate-spin shrink-0" />
-            <span className="truncate">拉取中：{pulling.file}</span>
+            <Loader2 className="h-3.5 w-3.5 animate-spin shrink-0 text-emerald-400" />
+            <span className="truncate">正在从设备拉取：{pulling.file}</span>
           </span>
-          <span className="font-mono tabular-nums shrink-0">{pulling.percent}%</span>
+          <span className="font-mono tabular-nums shrink-0 text-emerald-400">{pulling.percent}%</span>
         </div>
         <div className="h-1.5 rounded-full bg-zinc-800 overflow-hidden">
           <div
-            className="h-full bg-gradient-to-r from-indigo-500 to-purple-500 transition-[width] duration-200"
+            className="h-full bg-gradient-to-r from-emerald-500 to-teal-500 transition-[width] duration-200 ease-out"
             style={{ width: `${pulling.percent}%` }}
           />
         </div>

@@ -191,6 +191,10 @@ async function handleDeviceJob(
     staged.slice(Math.max(staged.lastIndexOf("\\"), staged.lastIndexOf("/")) + 1);
   const pcDir = job.devicePcFolder ?? customOutputDir ?? null;
 
+  // Switch the progress bar from "compression" to the adb-push phase: once
+  // the video/audio/image/pdf encoding bar has reached 100%, the green
+  // "推送中…" bar takes over using the push channel's percent.
+  useJobsStore.getState().setJobPushing(jobId, true);
   try {
     const pushChannel = new Channel<AdbProgressEvent>();
     pushChannel.onmessage = (ev) => {
@@ -214,5 +218,7 @@ async function handleDeviceJob(
     // where — surface that real message instead of a generic one.
     toast.error(extractErrorMessage(err) || "已压缩，但交付失败", { duration: 6000 });
     useJobsStore.getState().setJobOutput(jobId, staged, result.outputBytes);
+  } finally {
+    useJobsStore.getState().setJobPushing(jobId, false);
   }
 }

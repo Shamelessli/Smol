@@ -139,7 +139,12 @@ export function JobRow({ jobId }: { jobId: string }) {
         {isEncoding && (
           <div className="mt-1 flex flex-col gap-0.5">
             <div className="h-1 w-full rounded-full bg-zinc-800 overflow-hidden">
-              {(job.kind === "image" || job.kind === "pdf") ? (
+              {job.pushing ? (
+                <div
+                  className="h-full rounded-full bg-gradient-to-r from-emerald-500 to-teal-500 transition-[width] duration-300"
+                  style={{ width: `${job.progress ?? 0}%` }}
+                />
+              ) : (job.kind === "image" || job.kind === "pdf") ? (
                 <div className="h-full w-full rounded-full bg-gradient-to-r from-indigo-500 via-purple-500 to-indigo-500 bg-[length:200%_100%] animate-[pulse_1.5s_ease-in-out_infinite]" />
               ) : (
                 <div
@@ -148,7 +153,12 @@ export function JobRow({ jobId }: { jobId: string }) {
                 />
               )}
             </div>
-            {!(job.kind === "image" || job.kind === "pdf") && (
+            {job.pushing ? (
+              <div className="flex items-center gap-2 text-[10px] text-emerald-400 font-mono tabular-nums">
+                <span className="animate-pulse">推送中…</span>
+                <span>{job.progress ?? 0}%</span>
+              </div>
+            ) : !(job.kind === "image" || job.kind === "pdf") ? (
               <div className="flex items-center gap-2 text-[10px] text-zinc-500 font-mono tabular-nums">
                 <span>{job.progress ?? 0}%</span>
                 {job.speed && <span>{job.speed}</span>}
@@ -156,8 +166,7 @@ export function JobRow({ jobId }: { jobId: string }) {
                   <span>ETA {formatEta(job.etaSec)}</span>
                 )}
               </div>
-            )}
-            {(job.kind === "image" || job.kind === "pdf") && (
+            ) : (
               <div className="flex items-center gap-2 text-[10px] text-zinc-500 font-mono">
                 <span className="animate-pulse">Compressing…</span>
               </div>
