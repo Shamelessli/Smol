@@ -139,16 +139,21 @@ pub fn adb_path() -> Result<PathBuf, AppError> {
     ))
 }
 
-/// Build a useful adb error message. Connection problems (no device / offline /
-/// unauthorized) get the USB-debugging guidance; otherwise the device-side
-/// stderr tail (e.g. "Permission denied") is surfaced so the real cause shows.
-fn adb_error(stderr: &[u8], context: &str) -> AppError {
-    let tail = String::from_utf8_lossy(stderr)
+/// Tail of stderr, trimmed, last non-empty line.
+fn stderr_tail(stderr: &[u8]) -> String {
+    String::from_utf8_lossy(stderr)
         .lines()
         .filter(|l| !l.trim().is_empty())
         .last()
         .map(|s| s.trim().to_string())
-        .unwrap_or_default();
+        .unwrap_or_default()
+}
+
+/// Build a useful adb error message. Connection problems (no device / offline /
+/// unauthorized) get the USB-debugging guidance; otherwise the device-side
+/// stderr tail (e.g. "Permission denied") is surfaced so the real cause shows.
+fn adb_error(stderr: &[u8], context: &str) -> AppError {
+    let tail = stderr_tail(stderr);
     let lower = tail.to_lowercase();
     let conn = lower.contains("no devices")
         || lower.contains("offline")
@@ -189,6 +194,24 @@ pub struct PullResult {
     pub name: String,
     pub size: u64,
     pub remote_path: String,
+    /// False when this item failed (e.g. a large-file transfer that dropped).
+    pub ok: bool,
+    /// Actionable failure message, present when `ok` is false.
+    pub error: Option<String>,
+}
+
+/// Actionable message for a failed pull. Large-file transfers that drop
+/// mid-way are almost always a USB-level disconnect, so include the remedies.
+fn pull_failure_message(remote: &str, stderr: &[u8]) -> String {
+    let tail = stderr_tail(stderr);
+    let base = if tail.is_empty() {
+        format!("拉取 {remote} 失败")
+    } else {
+        format!("拉取 {remote} 失败：{tail}")
+    };
+    format!(
+        "{base}（若传输中途断开，请检查数据线/USB 接口，关闭 Windows 的 USB 选择性暂停，并在传输期间保持手机唤醒后重试）"
+    )
 }
 
 #[tauri::command]
@@ -199,11 +222,10 @@ pub async fn pull_device_files(
     let pulled = tauri::async_runtime::spawn_blocking(move || -> Result<Vec<PullResult>, AppError> {
         ensure_device_ready()?;
         let mut out = Vec::new();
-        let mut last_err: Option<Vec<u8>> = None;
+        let mut all_failed: Option<String> = None;
         for remote in items {
             let uuid = uuid::Uuid::new_v4().simple().to_string();
             let dest = format!("{workspace}\\{uuid}");
-            std::fs::create_dir_all(&dest)?;
             let name = remote.rsplit('/').next().unwrap_or("file").to_string();
             let local = Path::new(&dest).join(&name);
             let mut cmd = adb_cmd()?;
@@ -212,10 +234,20 @@ pub async fn pull_device_files(
                 .output()
                 .map_err(|e| AppError::Other(format!("adb pull failed: {e}")))?;
             if !out_res.status.success() {
-                // One bad item must not abort the whole batch: drop the empty
-                // uuid dir this pull created and move on to the next item.
+                // A failed item must not abort the batch: drop the empty uuid
+                // dir it created, record the failure, and continue.
                 let _ = std::fs::remove_dir_all(&dest);
-                last_err = Some(out_res.stderr);
+                let msg = pull_failure_message(&remote, &out_res.stderr);
+                all_failed.get_or_insert_with(|| msg.clone());
+                out.push(PullResult {
+                    key: uuid,
+                    local_path: String::new(),
+                    name,
+                    size: 0,
+                    remote_path: remote,
+                    ok: false,
+                    error: Some(msg),
+                });
                 continue;
             }
             let size = std::fs::metadata(&local).map(|m| m.len()).unwrap_or(0);
@@ -225,11 +257,14 @@ pub async fn pull_device_files(
                 name,
                 size,
                 remote_path: remote,
+                ok: true,
+                error: None,
             });
         }
-        if out.is_empty() {
-            let stderr = last_err.unwrap_or_default();
-            return Err(adb_error(&stderr, "adb pull 失败"));
+        if out.iter().all(|r| !r.ok) {
+            // Everything failed: surface the last actionable message.
+            let msg = all_failed.unwrap_or_else(|| "adb pull 失败".to_string());
+            return Err(AppError::Other(msg));
         }
         Ok(out)
     })

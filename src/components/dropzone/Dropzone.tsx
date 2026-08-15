@@ -6,6 +6,7 @@ import { toast } from "sonner";
 import { motion, AnimatePresence } from "framer-motion";
 import { cn } from "@/lib/utils";
 import { fileKindFromPath } from "@/lib/kinds";
+import { extractErrorMessage } from "@/lib/errors";
 import { getPathInfo, getImportWorkspace, pullDeviceFiles } from "@/lib/tauri";
 import { useJobsStore } from "@/store/jobs";
 import type { NewJobInput } from "@/store/jobs";
@@ -62,8 +63,11 @@ export function Dropzone({ isDraggingOver, hasFiles }: DropzoneProps) {
       const workspace = await getImportWorkspace();
       const results = await pullDeviceFiles(paths, workspace);
 
+      const ok = results.filter((r) => r.ok);
+      const failed = results.filter((r) => !r.ok);
+
       const toAdd: NewJobInput[] = [];
-      for (const r of results) {
+      for (const r of ok) {
         const kind = fileKindFromPath(r.name);
         if (kind === "unsupported") continue;
         toAdd.push({
@@ -77,21 +81,25 @@ export function Dropzone({ isDraggingOver, hasFiles }: DropzoneProps) {
         });
       }
 
+      if (failed.length > 0) {
+        const detail = failed
+          .map((f) => f.error)
+          .filter(Boolean)
+          .join("；");
+        toast.error(
+          `${failed.length} 个文件拉取失败。${detail || "请检查设备连接后重试"}`,
+          { duration: 8000 },
+        );
+      }
+
       if (toAdd.length > 0) {
         useJobsStore.getState().addFiles(toAdd);
         toast.success(`Imported ${toAdd.length} file${toAdd.length > 1 ? "s" : ""} from device`);
-      } else {
+      } else if (failed.length === 0) {
         toast("No supported files selected on device");
       }
     } catch (err) {
-      const message =
-        err instanceof Error
-          ? err.message
-          : err !== null && typeof err === "object" && "message" in err &&
-            typeof (err as Record<string, unknown>).message === "string"
-            ? (err as Record<string, unknown>).message as string
-            : "无法从设备导入文件，请重试";
-      toast.error(message, { duration: 6000 });
+      toast.error(extractErrorMessage(err), { duration: 6000 });
     }
   }
 

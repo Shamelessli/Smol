@@ -191,6 +191,8 @@ export interface PullResult {
   name: string;
   size: number;
   remotePath: string;
+  ok: boolean;
+  error: string | null;
 }
 
 // Mirrors DeliverResult in src-tauri/src/adb.rs
