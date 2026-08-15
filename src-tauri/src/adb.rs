@@ -396,6 +396,14 @@ pub async fn pull_device_files(
         for remote in items {
             let uuid = uuid::Uuid::new_v4().simple().to_string();
             let dest = format!("{workspace}\\{uuid}");
+            // adb pull requires the local parent directory to exist; it does NOT
+            // auto-create it. On paths containing spaces (e.g. a Windows user
+            // dir like "C:\Users\John Doe\…") adb additionally fails to create
+            // the leaf directory even on versions that normally would, surfacing
+            // as "No such file or directory" → "没有该文件". Pre-create `dest`
+            // so adb only has to write the file, mirroring `deliver_to_device`'s
+            // pc-folder branch which create_dir_all() before writing.
+            std::fs::create_dir_all(&dest)?;
             let name = remote.rsplit('/').next().unwrap_or("file").to_string();
             let local = Path::new(&dest).join(&name);
             let mut cmd = adb_cmd()?;
