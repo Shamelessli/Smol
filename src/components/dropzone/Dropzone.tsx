@@ -17,7 +17,15 @@ interface DropzoneProps {
 export function Dropzone({ isDraggingOver, hasFiles }: DropzoneProps) {
 
   async function handleOpenDialog() {
-    const results = await pickImport().catch(() => null);
+    const results = await pickImport().catch((e: unknown) => {
+      const message =
+        e instanceof Error ? e.message :
+        e !== null && typeof e === "object" && "message" in e && typeof (e as Record<string, unknown>).message === "string"
+          ? (e as Record<string, unknown>).message as string
+          : "无法导入所选文件，请重试";
+      toast.error(message, { duration: 6000 });
+      return null;
+    });
     if (!results) return;
 
     const toAdd: NewJobInput[] = [];

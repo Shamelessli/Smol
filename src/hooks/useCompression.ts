@@ -199,8 +199,8 @@ async function handleImportedJob(
     useJobsStore.getState().setJobOutput(jobId, staged, result.outputBytes);
     await deleteLocalFile(staged).catch(() => {});
     await deleteLocalFile(job.inputPath).catch(() => {});
-  } catch {
-    toast.error("已压缩，但写回设备失败，结果保存在本地", { duration: 6000 });
+  } catch (err) {
+    toast.error(extractErrorMessage(err) || "已压缩，但写回设备失败", { duration: 6000 });
     useJobsStore.getState().setJobOutput(jobId, staged, result.outputBytes);
   }
 }

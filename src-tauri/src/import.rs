@@ -4,7 +4,8 @@ use crate::error::{disk_full_hint, AppError};
 use windows::core::{Interface, HSTRING, PCWSTR};
 use windows::Win32::Foundation::HWND;
 use windows::Win32::Storage::EnhancedStorage::PKEY_Size;
-use windows::Win32::Storage::FileSystem::GetDiskFreeSpaceExW;
+use windows::Win32::Storage::FileSystem::{FILE_ATTRIBUTE_DIRECTORY, GetDiskFreeSpaceExW};
+use windows::Win32::System::SystemServices::SFGAO_FOLDER;
 use windows::Win32::System::Com::StructuredStorage::{PropVariantClear, PropVariantToUInt64};
 use windows::Win32::System::Com::{
     CoCreateInstance, CoInitializeEx, CoTaskMemFree, CoUninitialize, CLSCTX_ALL,
@@ -203,6 +204,15 @@ fn import_workspace_dir() -> Result<String, AppError> {
     Ok(format!(r"{}\Smol\imports", documents_dir()?))
 }
 
+/// Durable fallback for failed device delivery: `{documents}\Smol\recovered`.
+/// The import workspace is GC'd after 60 min, so failed deliveries are copied
+/// here (best-effort) and the path is surfaced in the error message.
+fn recovered_dir() -> Result<String, AppError> {
+    let dir = format!(r"{}\Smol\recovered", documents_dir()?);
+    std::fs::create_dir_all(&dir)?;
+    Ok(dir)
+}
+
 /// Resolve a filesystem path (or any display name) to an `IShellItem`.
 fn parse_shell_item(path: &str) -> Result<IShellItem, AppError> {
     unsafe {
@@ -247,8 +257,56 @@ fn parse_shell_child(parent: &IShellItem, child_name: &str) -> Result<IShellItem
 }
 
 /// Create/obtain a child shell item (e.g. the `smol` folder) under `parent`.
+/// Resolves an existing child first; when it does not exist, queues
+/// `IFileOperation::NewItem` (creating a directory) and re-resolves.
 fn create_child_folder(parent: &IShellItem, child_name: &str) -> Result<IShellItem, AppError> {
+    if let Ok(child) = parse_shell_child(parent, child_name) {
+        return Ok(child);
+    }
+    // Not present yet — create it on the device, then resolve the new child.
+    let op = new_file_operation()?;
+    let name_buf = child_name.encode_utf16().collect::<Vec<u16>>();
+    unsafe {
+        op.NewItem(
+            parent,
+            FILE_ATTRIBUTE_DIRECTORY.0,
+            PCWSTR(name_buf.as_ptr()),
+            PCWSTR::null(),
+            None,
+        )
+    }
+    .map_err(|e| AppError::Other(format!("NewItem({child_name}): {e}")))?;
+    perform(&op)?;
     parse_shell_child(parent, child_name)
+}
+
+/// Resolve `child_name` under `parent`, retrying because MTP enumeration can
+/// lag behind `PerformOperations` (the temp copy appears asynchronously).
+fn parse_shell_child_with_retry(parent: &IShellItem, child_name: &str) -> Result<IShellItem, AppError> {
+    let mut last_err: Option<AppError> = None;
+    for _ in 0..5 {
+        match parse_shell_child(parent, child_name) {
+            Ok(item) => return Ok(item),
+            Err(e) => last_err = Some(e),
+        }
+        std::thread::sleep(std::time::Duration::from_millis(150));
+    }
+    Err(last_err.unwrap_or_else(|| AppError::Other(format!("ParseDisplayName({child_name}) failed"))))
+}
+
+/// On device-delivery failure, best-effort copy the staged output into the
+/// durable `recovered` folder and append the location to the error message.
+/// Returns the original error unchanged when the copy cannot be performed.
+fn preserve_on_delivery_failure(local_path: &str, err: AppError) -> AppError {
+    let file_name = Path::new(local_path).file_name().map(|s| s.to_string_lossy().into_owned());
+    let dir = recovered_dir();
+    if let (Some(name), Ok(dir)) = (file_name, dir) {
+        let dest = Path::new(&dir).join(&name);
+        if std::fs::copy(local_path, &dest).is_ok() {
+            return AppError::Other(format!("{err}; 压缩结果已复制到 {}", dest.to_string_lossy()));
+        }
+    }
+    err
 }
 
 /// Resolve `original_name` inside the parent folder captured by `pidl_bytes`.
@@ -302,6 +360,8 @@ pub async fn pick_import() -> Result<Vec<PickResult>, AppError> {
 
         let count = unsafe { results.GetCount() }.map_err(|e| AppError::Other(format!("GetCount: {e}")))?;
         let mut out: Vec<PickResult> = Vec::new();
+        // MTP selections awaiting import: (item, display name, expected bytes)
+        let mut mtp: Vec<(IShellItem, String, u64)> = Vec::new();
 
         // free-space pre-check once, on the volume the workspace lives on
         let mut free: u64 = 0;
@@ -325,17 +385,31 @@ pub async fn pick_import() -> Result<Vec<PickResult>, AppError> {
                 continue;
             }
 
+            // MTP item: skip folders — they have no SIGDN_FILESYSPATH and
+            // CopyItem would otherwise try to recurse into them.
+            let is_folder = unsafe { item.GetAttributes(SFGAO_FOLDER) }
+                .map(|attrs| attrs.contains(SFGAO_FOLDER))
+                .unwrap_or(true); // cannot determine → skip rather than recurse
+            if is_folder { continue; }
+
             // MTP item: import into a unique workspace subdir
             let name = display_name(&item, SIGDN_DESKTOPABSOLUTEPARSING)
                 .and_then(|p| p.rsplit(['\\', '/']).next().map(|s| s.to_string()))
                 .unwrap_or_else(|| format!("file-{i}"));
             let needed = shell_item_size(&item).unwrap_or(0);
-            if !has_enough_space(free, needed) {
-                return Err(AppError::Other(
-                    disk_full_hint("no space left on device").unwrap_or("Not enough disk space.").into(),
-                ));
-            }
+            mtp.push((item, name, needed));
+        }
 
+        // Cumulative free-space check across the whole selection, before
+        // copying anything.
+        let total_needed: u64 = mtp.iter().map(|(_, _, n)| *n).sum();
+        if !has_enough_space(free, total_needed) {
+            return Err(AppError::Other(
+                disk_full_hint("no space left on device").unwrap_or("Not enough disk space.").into(),
+            ));
+        }
+
+        for (item, name, _needed) in mtp {
             let uuid = uuid::Uuid::new_v4().simple().to_string();
             let dest = compute_import_dir(&workspace, &uuid);
             std::fs::create_dir_all(&dest)?;
@@ -431,24 +505,33 @@ pub async fn deliver_output(
             copy_item(&op, &local_item, &dest, Some(&target.name))?;
             unsafe { op.DeleteItem(&original_item, None) }
                 .map_err(|e| AppError::Other(format!("DeleteItem: {e}")))?;
-            perform(&op)?;
+            perform(&op).map_err(|e| preserve_on_delivery_failure(&lp, AppError::Other(format!(
+                "写入设备失败（原文件可能已被删除，压缩副本在设备上名为 \"{}\"）：{e}",
+                target.name
+            ))))?;
 
             // Phase 2 — rename the device copy from the temp name to the
             // original name. The local workspace file is deliberately NOT
             // renamed, so the caller's delete_local_file(local_path) still
-            // works after delivery.
-            let temp_item = parse_shell_child(&dest, &target.name)?;
+            // works after delivery. MTP enumeration can lag
+            // PerformOperations, so resolving the temp copy is retried.
+            let temp_item = parse_shell_child_with_retry(&dest, &target.name)
+                .map_err(|e| preserve_on_delivery_failure(&lp, AppError::Other(format!(
+                    "RenameItem failed: the original was already deleted on the device and the compressed file is stored under \"{}\"; resolving it for rename failed: {e}",
+                    target.name
+                ))))?;
             let op2 = new_file_operation()?;
             let rename = HSTRING::from(&target.rename_from);
             unsafe { op2.RenameItem(&temp_item, &rename, None) }
-                .map_err(|e| AppError::Other(format!("RenameItem: {e}")))?;
-            perform(&op2).map_err(|e| AppError::Other(format!(
+                .map_err(|e| preserve_on_delivery_failure(&lp, AppError::Other(format!("RenameItem: {e}"))))?;
+            perform(&op2).map_err(|e| preserve_on_delivery_failure(&lp, AppError::Other(format!(
                 "RenameItem failed: the original was already deleted on the device and the compressed file is stored under \"{}\"; renaming to \"{}\" failed: {e}",
                 target.name, target.rename_from
-            )))?;
+            ))))?;
         } else {
-            copy_item(&op, &local_item, &dest, Some(&target.name))?;
-            perform(&op)?;
+            copy_item(&op, &local_item, &dest, Some(&target.name))
+                .map_err(|e| preserve_on_delivery_failure(&lp, e))?;
+            perform(&op).map_err(|e| preserve_on_delivery_failure(&lp, e))?;
         }
         Ok(DeliverResult { note: None })
     }).await
