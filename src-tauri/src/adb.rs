@@ -1,5 +1,6 @@
 use std::path::{Path, PathBuf};
 use serde::Serialize;
+use tauri::Manager;
 use crate::error::AppError;
 
 #[cfg(target_os = "windows")]
@@ -81,18 +82,23 @@ pub fn adb_path() -> Result<PathBuf, AppError> {
 
 #[tauri::command]
 pub async fn list_device_dir(path: String) -> Result<Vec<DeviceEntry>, AppError> {
-    let mut cmd = adb_cmd()?;
-    let escaped = path.replace('\'', "'\\''");
-    cmd.args(["shell", &format!("ls -la '{escaped}'")]);
-    let out = cmd
-        .output()
-        .map_err(|e| AppError::Other(format!("adb shell failed: {e}")))?;
-    if !out.status.success() {
-        return Err(AppError::Other(
-            "无法列出设备目录：请确认设备已连接并启用 USB 调试".into(),
-        ));
-    }
-    Ok(parse_ls_output(&String::from_utf8_lossy(&out.stdout)))
+    let entries = tauri::async_runtime::spawn_blocking(move || -> Result<Vec<DeviceEntry>, AppError> {
+        let mut cmd = adb_cmd()?;
+        let escaped = path.replace('\'', "'\\''");
+        cmd.args(["shell", &format!("ls -la '{escaped}'")]);
+        let out = cmd
+            .output()
+            .map_err(|e| AppError::Other(format!("adb shell failed: {e}")))?;
+        if !out.status.success() {
+            return Err(AppError::Other(
+                "无法列出设备目录：请确认设备已连接并启用 USB 调试".into(),
+            ));
+        }
+        Ok(parse_ls_output(&String::from_utf8_lossy(&out.stdout)))
+    })
+    .await
+    .map_err(|e| AppError::Other(format!("adb shell 任务失败: {e}")))?;
+    Ok(entries?)
 }
 
 #[derive(Serialize)]
@@ -110,69 +116,80 @@ pub async fn pull_device_files(
     items: Vec<String>,
     workspace: String,
 ) -> Result<Vec<PullResult>, AppError> {
-    let mut out = Vec::new();
-    for remote in items {
-        let uuid = uuid::Uuid::new_v4().simple().to_string();
-        let dest = format!("{workspace}\\{uuid}");
-        std::fs::create_dir_all(&dest)?;
-        let name = remote.rsplit('/').next().unwrap_or("file").to_string();
-        let local = Path::new(&dest).join(&name);
-        let mut cmd = adb_cmd()?;
-        cmd.args(["pull", &remote]).arg(&local);
-        let st = cmd
-            .status()
-            .map_err(|e| AppError::Other(format!("adb pull failed: {e}")))?;
-        if !st.success() {
-            return Err(AppError::Other(format!(
-                "adb pull 失败：{remote}，请确认设备已连接并启用 USB 调试"
-            )));
+    let pulled = tauri::async_runtime::spawn_blocking(move || -> Result<Vec<PullResult>, AppError> {
+        let mut out = Vec::new();
+        for remote in items {
+            let uuid = uuid::Uuid::new_v4().simple().to_string();
+            let dest = format!("{workspace}\\{uuid}");
+            std::fs::create_dir_all(&dest)?;
+            let name = remote.rsplit('/').next().unwrap_or("file").to_string();
+            let local = Path::new(&dest).join(&name);
+            let mut cmd = adb_cmd()?;
+            cmd.args(["pull", &remote]).arg(&local);
+            let st = cmd
+                .status()
+                .map_err(|e| AppError::Other(format!("adb pull failed: {e}")))?;
+            if !st.success() {
+                // One bad item must not abort the whole batch: drop the empty
+                // uuid dir this pull created and move on to the next item.
+                let _ = std::fs::remove_dir_all(&dest);
+                continue;
+            }
+            let size = std::fs::metadata(&local).map(|m| m.len()).unwrap_or(0);
+            out.push(PullResult {
+                key: uuid,
+                local_path: local.to_string_lossy().into_owned(),
+                name,
+                size,
+                remote_path: remote,
+            });
         }
-        let size = std::fs::metadata(&local).map(|m| m.len()).unwrap_or(0);
-        out.push(PullResult {
-            key: uuid,
-            local_path: local.to_string_lossy().into_owned(),
-            name,
-            size,
-            remote_path: remote,
-        });
-    }
-    Ok(out)
+        if out.is_empty() {
+            return Err(AppError::Other(
+                "adb pull 失败 — 请确认设备已连接并启用 USB 调试".into(),
+            ));
+        }
+        Ok(out)
+    })
+    .await
+    .map_err(|e| AppError::Other(format!("adb pull 任务失败: {e}")))?;
+    Ok(pulled?)
 }
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DeliverResult {
     pub note: Option<String>,
+    pub path: Option<String>,
 }
 
 /// Return (creating it if needed) the local import workspace:
 /// `Documents\Smol\imports`. Every `adb pull` stores each file in its own
 /// `{uuid}` subdirectory here so staged outputs never collide.
 #[tauri::command]
-pub fn get_import_workspace() -> Result<String, AppError> {
-    let docs = std::env::var("USERPROFILE")
-        .map_err(|_| AppError::Other("USERPROFILE not set".into()))?;
-    let dir = Path::new(&docs)
-        .join("Documents")
-        .join("Smol")
-        .join("imports");
+pub fn get_import_workspace(app: tauri::AppHandle) -> Result<String, AppError> {
+    let docs = app
+        .path()
+        .document_dir()
+        .map_err(|e| AppError::Other(format!("无法获取文档目录: {e}")))?;
+    let dir = docs.join("Smol").join("imports");
     std::fs::create_dir_all(&dir)?;
     Ok(dir.to_string_lossy().into_owned())
 }
 
-fn recovered_dir() -> Result<PathBuf, AppError> {
-    let docs = std::env::var("USERPROFILE")
-        .map_err(|_| AppError::Other("USERPROFILE not set".into()))?;
-    let dir = Path::new(&docs)
-        .join("Documents")
-        .join("Smol")
-        .join("recovered");
+fn recovered_dir(app: &tauri::AppHandle) -> Result<PathBuf, AppError> {
+    let docs = app
+        .path()
+        .document_dir()
+        .map_err(|e| AppError::Other(format!("无法获取文档目录: {e}")))?;
+    let dir = docs.join("Smol").join("recovered");
     std::fs::create_dir_all(&dir)?;
     Ok(dir)
 }
 
 #[tauri::command]
 pub async fn deliver_to_device(
+    app: tauri::AppHandle,
     local_path: String,
     mode: String,
     remote_path: String,
@@ -180,63 +197,77 @@ pub async fn deliver_to_device(
     pc_dir: Option<String>,
     new_name: String,
 ) -> Result<DeliverResult, AppError> {
-    let run = || -> Result<DeliverResult, AppError> {
-        match mode.as_str() {
-            "pc-folder" => {
-                let dir = pc_dir.ok_or_else(|| AppError::Other("未选择 PC 输出目录".into()))?;
-                std::fs::create_dir_all(&dir)?;
-                std::fs::copy(&local_path, Path::new(&dir).join(&new_name))?;
-                Ok(DeliverResult { note: None })
-            }
-            "android-folder" => {
-                let dir = remote_dir.ok_or_else(|| AppError::Other("未选择设备目标目录".into()))?;
-                let target = format!("{}/{}", dir.trim_end_matches('/'), new_name);
-                let mut cmd = adb_cmd()?;
-                cmd.args(["push"]).arg(&local_path).arg(&target);
-                let st = cmd
-                    .status()
-                    .map_err(|e| AppError::Other(format!("adb push failed: {e}")))?;
-                if !st.success() {
-                    return Err(AppError::Other(
-                        "adb push 失败：请确认设备已连接并启用 USB 调试".into(),
-                    ));
+    tauri::async_runtime::spawn_blocking(move || {
+        let run = || -> Result<DeliverResult, AppError> {
+            match mode.as_str() {
+                "pc-folder" => {
+                    let dir = pc_dir.ok_or_else(|| AppError::Other("未选择 PC 输出目录".into()))?;
+                    std::fs::create_dir_all(&dir)?;
+                    let target = Path::new(&dir).join(&new_name);
+                    std::fs::copy(&local_path, &target)?;
+                    Ok(DeliverResult {
+                        note: None,
+                        path: Some(target.to_string_lossy().into_owned()),
+                    })
                 }
-                Ok(DeliverResult { note: None })
-            }
-            "replace" => {
-                let mut cmd = adb_cmd()?;
-                cmd.args(["push"]).arg(&local_path).arg(&remote_path);
-                let st = cmd
-                    .status()
-                    .map_err(|e| AppError::Other(format!("adb push failed: {e}")))?;
-                if !st.success() {
-                    return Err(AppError::Other(
-                        "adb push 失败：请确认设备已连接并启用 USB 调试".into(),
-                    ));
-                }
-                Ok(DeliverResult { note: None })
-            }
-            _ => return Err(AppError::Other(format!("未知交付模式: {mode}"))),
-        }
-    };
-    match run() {
-        Ok(r) => Ok(r),
-        Err(e) => {
-            let base = e.to_string();
-            let msg = match recovered_dir() {
-                Ok(dir) => {
-                    let recovered = dir.join(&new_name);
-                    if std::fs::copy(&local_path, &recovered).is_ok() {
-                        format!("{base}；压缩结果已复制到 {}", recovered.display())
-                    } else {
-                        base
+                "android-folder" => {
+                    let dir = remote_dir.ok_or_else(|| AppError::Other("未选择设备目标目录".into()))?;
+                    let target = format!("{}/{}", dir.trim_end_matches('/'), new_name);
+                    let mut cmd = adb_cmd()?;
+                    cmd.args(["push"]).arg(&local_path).arg(&target);
+                    let st = cmd
+                        .status()
+                        .map_err(|e| AppError::Other(format!("adb push failed: {e}")))?;
+                    if !st.success() {
+                        return Err(AppError::Other(
+                            "adb push 失败：请确认设备已连接并启用 USB 调试".into(),
+                        ));
                     }
+                    Ok(DeliverResult {
+                        note: None,
+                        path: Some(target),
+                    })
                 }
-                Err(_) => base,
-            };
-            Err(AppError::Other(msg))
+                "replace" => {
+                    let mut cmd = adb_cmd()?;
+                    cmd.args(["push"]).arg(&local_path).arg(&remote_path);
+                    let st = cmd
+                        .status()
+                        .map_err(|e| AppError::Other(format!("adb push failed: {e}")))?;
+                    if !st.success() {
+                        return Err(AppError::Other(
+                            "adb push 失败：请确认设备已连接并启用 USB 调试".into(),
+                        ));
+                    }
+                    Ok(DeliverResult {
+                        note: None,
+                        path: Some(remote_path),
+                    })
+                }
+                _ => return Err(AppError::Other(format!("未知交付模式: {mode}"))),
+            }
+        };
+        match run() {
+            Ok(r) => Ok(r),
+            Err(e) => {
+                let base = e.to_string();
+                let msg = match recovered_dir(&app) {
+                    Ok(dir) => {
+                        let recovered = dir.join(&new_name);
+                        if std::fs::copy(&local_path, &recovered).is_ok() {
+                            format!("{base}；压缩结果已复制到 {}", recovered.display())
+                        } else {
+                            base
+                        }
+                    }
+                    Err(_) => base,
+                };
+                Err(AppError::Other(msg))
+            }
         }
-    }
+    })
+    .await
+    .map_err(|e| AppError::Other(format!("adb push 任务失败: {e}")))?
 }
 
 #[cfg(test)]

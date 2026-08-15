@@ -196,6 +196,8 @@ export interface PullResult {
 // Mirrors DeliverResult in src-tauri/src/adb.rs
 export interface DeliverResult {
   note?: string | null;
+  /** The real delivered destination: copied local path, remote target, or null. */
+  path: string | null;
 }
 
 /** List a directory on the connected Android device (`adb shell ls -la`). */

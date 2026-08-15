@@ -19,7 +19,7 @@
 
 import {
   createWriteStream, copyFileSync,
-  readdirSync, existsSync, mkdirSync
+  readdirSync, existsSync, mkdirSync, statSync
 } from 'node:fs';
 import { rm } from 'node:fs/promises';
 import { pipeline } from 'node:stream/promises';
@@ -67,26 +67,71 @@ async function main() {
 
   mkdirSync(BINARIES_DIR, { recursive: true });
 
-  // ── 1. Download zip ─────────────────────────────────────────────────────────
+  // ── 1. Download zip (self-healing) ────────────────────────────────────────
   const archivePath = join(BINARIES_DIR, '_platform-tools.zip');
+
+  /** Download the archive; never leave a partial/truncated zip behind. */
+  async function downloadArchive() {
+    console.log('↓  Downloading platform-tools-latest-windows.zip…');
+    try {
+      const dlRes = await fetch(ARCHIVE_URL);
+      if (!dlRes.ok) throw new Error(`Download failed: HTTP ${dlRes.status} — ${ARCHIVE_URL}`);
+      const contentLength = Number(dlRes.headers.get('content-length') || 0);
+      if (contentLength > 0) console.log(`   Size: ~${(contentLength / 1_000_000).toFixed(0)} MB`);
+      await pipeline(Readable.fromWeb(dlRes.body), createWriteStream(archivePath));
+      const writtenBytes = statSync(archivePath).size;
+      if (contentLength > 0 && writtenBytes !== contentLength) {
+        console.warn(
+          `   WARNING: downloaded ${writtenBytes} bytes, expected ${contentLength} — archive may be truncated.`
+        );
+      } else if (contentLength > 0) {
+        console.log('   Download complete.');
+      } else {
+        console.warn('   WARNING: no content-length header — downloaded size not verified.');
+      }
+    } catch (err) {
+      // A partial zip must never survive: the skip-if-exists check would let
+      // a truncated archive bypass the download on the next run.
+      await rm(archivePath, { force: true }).catch(() => { });
+      throw err;
+    }
+  }
+
   if (existsSync(archivePath)) {
     console.log('✓  Archive already present — skipping download.');
   } else {
-    console.log('↓  Downloading platform-tools-latest-windows.zip…');
-    const dlRes = await fetch(ARCHIVE_URL);
-    if (!dlRes.ok) throw new Error(`Download failed: HTTP ${dlRes.status} — ${ARCHIVE_URL}`);
-    const totalMb = Number(dlRes.headers.get('content-length') || 0) / 1_000_000;
-    if (totalMb > 0) console.log(`   Size: ~${totalMb.toFixed(0)} MB`);
-    await pipeline(Readable.fromWeb(dlRes.body), createWriteStream(archivePath));
-    console.log('   Download complete.');
+    await downloadArchive();
   }
 
   // ── 2. Extract with 7za (bundled by 7zip-bin devDep — handles .zip) ────────
+  //    Self-heal: a failed extraction means the archive is corrupt/truncated —
+  //    drop it and re-download once before giving up.
   const extractDir = join(BINARIES_DIR, '_extract');
-  mkdirSync(extractDir, { recursive: true });
-  console.log('↓  Extracting…');
-  const { path7za } = await import('7zip-bin');
-  execFileSync(path7za, ['x', archivePath, `-o${extractDir}`, '-y'], { stdio: 'inherit' });
+
+  async function extractArchive() {
+    await rm(extractDir, { recursive: true, force: true }).catch(() => { });
+    mkdirSync(extractDir, { recursive: true });
+    console.log('↓  Extracting…');
+    const { path7za } = await import('7zip-bin');
+    execFileSync(path7za, ['x', archivePath, `-o${extractDir}`, '-y'], { stdio: 'inherit' });
+  }
+
+  let extracted = false;
+  for (let attempt = 0; attempt < 2 && !extracted; attempt++) {
+    try {
+      await extractArchive();
+      extracted = true;
+    } catch (err) {
+      if (attempt === 0) {
+        console.warn('   Extraction failed — archive may be truncated; re-downloading once…');
+        await rm(archivePath, { force: true }).catch(() => { });
+        await downloadArchive();
+      } else {
+        throw err;
+      }
+    }
+  }
+  if (!extracted) throw new Error('Failed to extract platform-tools archive.');
 
   // ── 3. Locate and install adb.exe + DLLs ───────────────────────────────────
   const adbSrc = findFile(extractDir, 'adb.exe');

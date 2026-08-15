@@ -194,9 +194,12 @@ async function handleDeviceJob(
   const staged = result.outputPath;
 
   if (result.outputLarger) {
-    // Already optimal: the device keeps the original — drop the local copy.
-    useJobsStore.getState().setJobOutput(jobId, job.inputPath, result.outputBytes);
+    // Device keeps the original; remove BOTH local copies (input + staged output).
+    useJobsStore
+      .getState()
+      .setJobOutput(jobId, job.deviceRemotePath ?? job.inputPath, result.outputBytes);
     await deleteLocalFile(job.inputPath).catch(() => {});
+    await deleteLocalFile(result.outputPath).catch(() => {}); // the staged larger output
     return;
   }
 
@@ -215,7 +218,7 @@ async function handleDeviceJob(
       newName,
     );
     if (deliver.note) toast.info(deliver.note);
-    useJobsStore.getState().setJobOutput(jobId, staged, result.outputBytes);
+    useJobsStore.getState().setJobOutput(jobId, deliver.path ?? staged, result.outputBytes);
     await deleteLocalFile(staged).catch(() => {});
     await deleteLocalFile(job.inputPath).catch(() => {});
   } catch (err) {
