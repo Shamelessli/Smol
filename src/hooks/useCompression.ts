@@ -10,6 +10,7 @@ import {
   replaceOriginal,
   deliverToDevice,
   deleteLocalFile,
+  type AdbProgressEvent,
 } from "@/lib/tauri";
 import type { CompressResult, VideoProgressEvent } from "@/lib/tauri";
 import type { Job } from "@/types";
@@ -191,6 +192,10 @@ async function handleDeviceJob(
   const pcDir = job.devicePcFolder ?? customOutputDir ?? null;
 
   try {
+    const pushChannel = new Channel<AdbProgressEvent>();
+    pushChannel.onmessage = (ev) => {
+      useJobsStore.getState().updateJobProgress(jobId, { progress: ev.percent });
+    };
     const deliver = await deliverToDevice(
       staged,
       mode,
@@ -198,6 +203,7 @@ async function handleDeviceJob(
       job.deviceRemoteDir ?? null,
       pcDir,
       newName,
+      pushChannel,
     );
     if (deliver.note) toast.info(deliver.note);
     useJobsStore.getState().setJobOutput(jobId, deliver.path ?? staged, result.outputBytes);

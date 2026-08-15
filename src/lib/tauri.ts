@@ -202,13 +202,27 @@ export interface DeliverResult {
   path: string | null;
 }
 
+/** Streamed adb transfer progress (`adb pull` / `adb push`). */
+export interface AdbProgressEvent {
+  /** "pull" | "push" */
+  operation: string;
+  /** The file being transferred. */
+  file: string;
+  /** 0-100 */
+  percent: number;
+}
+
 /** List a directory on the connected Android device (`adb shell ls -la`). */
 export const listDeviceDir = (path: string) =>
   invoke<DeviceEntry[]>("list_device_dir", { path });
 
 /** Pull device files into the import workspace; returns the local copies. */
-export const pullDeviceFiles = (items: string[], workspace: string) =>
-  invoke<PullResult[]>("pull_device_files", { items, workspace });
+export const pullDeviceFiles = (
+  items: string[],
+  workspace: string,
+  onProgress: Channel<AdbProgressEvent>,
+) =>
+  invoke<PullResult[]>("pull_device_files", { items, workspace, onProgress });
 
 /** Create (if needed) and return Documents\Smol\imports. */
 export const getImportWorkspace = () =>
@@ -226,6 +240,7 @@ export const deliverToDevice = (
   remoteDir: string | null,
   pcDir: string | null,
   newName: string,
+  onProgress: Channel<AdbProgressEvent>,
 ) =>
   invoke<DeliverResult>("deliver_to_device", {
     localPath,
@@ -234,6 +249,7 @@ export const deliverToDevice = (
     remoteDir,
     pcDir,
     newName,
+    onProgress,
   });
 
 /** Delete a local file (workspace import copy / staged output after delivery). */

@@ -1,13 +1,19 @@
 import { useState } from "react";
+import { Channel } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { v4 as uuidv4 } from "uuid";
-import { Upload, Trash2, Smartphone } from "lucide-react";
+import { Upload, Trash2, Smartphone, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import { motion, AnimatePresence } from "framer-motion";
 import { cn } from "@/lib/utils";
 import { fileKindFromPath } from "@/lib/kinds";
 import { extractErrorMessage } from "@/lib/errors";
-import { getPathInfo, getImportWorkspace, pullDeviceFiles } from "@/lib/tauri";
+import {
+  getPathInfo,
+  getImportWorkspace,
+  pullDeviceFiles,
+  type AdbProgressEvent,
+} from "@/lib/tauri";
 import { useJobsStore } from "@/store/jobs";
 import type { NewJobInput } from "@/store/jobs";
 import { DeviceBrowser } from "@/components/device/DeviceBrowser";
@@ -26,6 +32,7 @@ interface DropzoneProps {
 
 export function Dropzone({ isDraggingOver, hasFiles }: DropzoneProps) {
   const [browserOpen, setBrowserOpen] = useState(false);
+  const [pulling, setPulling] = useState<{ file: string; percent: number } | null>(null);
 
   async function handleOpenDialog() {
     const selected = await open({
@@ -59,9 +66,18 @@ export function Dropzone({ isDraggingOver, hasFiles }: DropzoneProps) {
   /** Pull the selected remote files into the import workspace and enqueue them. */
   async function handleDeviceSelect(paths: string[]) {
     if (paths.length === 0) return;
+    const channel = new Channel<AdbProgressEvent>();
+    channel.onmessage = (ev) => {
+      const short = ev.file.split("/").pop() ?? ev.file;
+      setPulling({ file: short, percent: ev.percent });
+    };
+    setPulling({
+      file: paths.length > 1 ? `${paths.length} 个文件` : (paths[0].split("/").pop() ?? paths[0]),
+      percent: 0,
+    });
     try {
       const workspace = await getImportWorkspace();
-      const results = await pullDeviceFiles(paths, workspace);
+      const results = await pullDeviceFiles(paths, workspace, channel);
 
       const ok = results.filter((r) => r.ok);
       const failed = results.filter((r) => !r.ok);
@@ -100,6 +116,8 @@ export function Dropzone({ isDraggingOver, hasFiles }: DropzoneProps) {
       }
     } catch (err) {
       toast.error(extractErrorMessage(err), { duration: 6000 });
+    } finally {
+      setPulling(null);
     }
   }
 
@@ -245,6 +263,25 @@ export function Dropzone({ isDraggingOver, hasFiles }: DropzoneProps) {
         void handleDeviceSelect(paths);
       }}
     />
+
+    {/* Pull progress bar */}
+    {pulling && (
+      <div className="fixed bottom-4 left-1/2 -translate-x-1/2 z-50 w-[420px] max-w-[90vw] px-4 py-3 rounded-lg bg-zinc-900/95 border border-zinc-700 shadow-2xl">
+        <div className="flex items-center justify-between text-xs text-zinc-300 mb-1.5">
+          <span className="flex items-center gap-1.5 truncate">
+            <Loader2 className="h-3.5 w-3.5 animate-spin shrink-0" />
+            <span className="truncate">拉取中：{pulling.file}</span>
+          </span>
+          <span className="font-mono tabular-nums shrink-0">{pulling.percent}%</span>
+        </div>
+        <div className="h-1.5 rounded-full bg-zinc-800 overflow-hidden">
+          <div
+            className="h-full bg-gradient-to-r from-indigo-500 to-purple-500 transition-[width] duration-200"
+            style={{ width: `${pulling.percent}%` }}
+          />
+        </div>
+      </div>
+    )}
     </>
   );
 }
