@@ -9,6 +9,8 @@ use crate::commands::compress_video::CompressResult;
 
 #[cfg(target_os = "windows")]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
+#[cfg(target_os = "windows")]
+const CREATE_BELOW_NORMAL_PRIORITY_CLASS: u32 = 0x00004000;
 
 // ── Preset → -dPDFSETTINGS ────────────────────────────────────────────────────
 
@@ -104,9 +106,10 @@ pub async fn compress_pdf(
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::piped());
 
-    // Windows: suppress the black CMD console window
+    // Windows: suppress the black CMD console window and run below-normal
+    // priority so the foreground app stays smooth during background compression.
     #[cfg(target_os = "windows")]
-    cmd.creation_flags(CREATE_NO_WINDOW);
+    cmd.creation_flags(CREATE_NO_WINDOW | CREATE_BELOW_NORMAL_PRIORITY_CLASS);
 
     let mut child = cmd
         .spawn()

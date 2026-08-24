@@ -13,6 +13,8 @@ use crate::jobs::progress::ProgressEvent;
 use std::os::windows::process::CommandExt;
 #[cfg(target_os = "windows")]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
+#[cfg(target_os = "windows")]
+const CREATE_BELOW_NORMAL_PRIORITY_CLASS: u32 = 0x00004000;
 
 // ─── Managed state ────────────────────────────────────────────────────────────
 
@@ -101,9 +103,11 @@ pub async fn compress_video(
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped()); // piped so we can include in error messages
 
-    // Windows: prevent a black CMD box from flashing on screen
+    // Windows: prevent a black CMD box from flashing on screen, and run the
+    // encoder below-normal priority so a focused foreground app stays smooth
+    // while video compression runs in the background.
     #[cfg(target_os = "windows")]
-    cmd.creation_flags(CREATE_NO_WINDOW);
+    cmd.creation_flags(CREATE_NO_WINDOW | CREATE_BELOW_NORMAL_PRIORITY_CLASS);
 
     let mut child = cmd
         .spawn()

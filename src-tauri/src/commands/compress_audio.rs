@@ -12,6 +12,8 @@ use crate::commands::compress_video::{ActiveJobPids, CompressResult};
 
 #[cfg(target_os = "windows")]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
+#[cfg(target_os = "windows")]
+const CREATE_BELOW_NORMAL_PRIORITY_CLASS: u32 = 0x00004000;
 
 // ─── compress_audio ───────────────────────────────────────────────────────────
 
@@ -89,9 +91,10 @@ pub async fn compress_audio(
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
 
-    // Windows: suppress console window flash
+    // Windows: suppress console window flash and run below-normal priority so
+    // the foreground app stays responsive while audio encodes in the background.
     #[cfg(target_os = "windows")]
-    cmd.creation_flags(CREATE_NO_WINDOW);
+    cmd.creation_flags(CREATE_NO_WINDOW | CREATE_BELOW_NORMAL_PRIORITY_CLASS);
 
     let mut child = cmd
         .spawn()
